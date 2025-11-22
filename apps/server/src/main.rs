@@ -32,19 +32,18 @@ async fn ws_handler(
 
 #[tokio::main]
 async fn main() {
-    let room_routes: Router<http::StatusCode> = Router::new()
+    let room_routes = Router::new()
         .route("/create", post(|| async { StatusCode::CREATED }))
-        .route("/:code/ws", get(ws_handler));
+        .route("/{code}/ws", get(ws_handler));
+
+    let api_routes = Router::new()
+        .nest("/rooms", room_routes);
 
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
         .route("/health", get(|| async { "Server is up" }))
-        .route("/api/v1", get(json));
+        .nest("/api/v1", api_routes);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
-}
-
-async fn json() -> Json<Value> {
-    Json(json!({ "data": 42 }))
 }
