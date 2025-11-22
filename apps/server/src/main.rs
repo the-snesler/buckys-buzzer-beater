@@ -1,6 +1,9 @@
 use axum::{routing::get, Json, Router};
 use serde_json::{json, Value};
 
+const HOST: &str = "0.0.0.0";
+const PORT: u16 = 3000;
+
 #[tokio::main]
 async fn main() {
     let app = Router::new()
@@ -8,7 +11,8 @@ async fn main() {
         .route("/health", get(|| async { "Server is up" }))
         .route("/api", get(json));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", HOST, PORT)).await.unwrap();
+    println!("Server running on http://{}:{}", HOST, PORT);
     axum::serve(listener, app).await.unwrap();
 }
 
