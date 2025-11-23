@@ -14,6 +14,7 @@ pub enum WsMsg {
     BuzzEnable,
     BuzzDisable,
     Buzz,
+    HostChecked { correct: bool },
     DoHeartbeat { hbid: HeartbeatId, t_sent: UnixMs },
     Heartbeat { hbid: HeartbeatId },
     GotHeartbeat { hbid: HeartbeatId },

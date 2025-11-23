@@ -103,7 +103,7 @@ struct WsQuery {
     #[serde(rename = "playerName")]
     player_name: String,
     #[serde(rename = "playerID")]
-    player_id: String,
+    player_id: u32,
 }
 
 async fn ws_upgrade_handler(
@@ -116,7 +116,7 @@ async fn ws_upgrade_handler(
         player_id,
     }): Query<WsQuery>,
 ) -> Response {
-    ws_upgrade.on_upgrade(async |ws| {
+    ws_upgrade.on_upgrade(async move |ws| {
         match ws_socket_handler(
             ws,
             rp,
@@ -191,7 +191,7 @@ async fn ws_socket_handler(
                     let room = room_map
                         .get_mut(&code)
                         .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-                    room.update(&msg);
+                    room.update(&msg, player_id);
                 }
             }
         }

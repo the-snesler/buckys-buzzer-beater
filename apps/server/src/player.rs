@@ -12,6 +12,8 @@ pub type PlayerId = u32;
 pub struct Player {
     pid: PlayerId,
     name: String,
+    score: i32,
+    buzzed: bool,
 }
 
 #[derive(Debug)]
@@ -32,6 +34,10 @@ impl PlayerEntry {
         }
     }
 
+    pub fn did_buzz(&self) -> bool {
+        self.player.buzzed
+    }
+
     pub async fn update(&self, msg: &WsMsg) -> Result<(), SendError<WsMsg>> {
         self.channel.0.send(msg.clone()).await?;
         Ok(())
@@ -39,7 +45,7 @@ impl PlayerEntry {
 }
 
 impl Player {
-    pub fn new(pid: PlayerId, name: String) -> Self {
-        Self { pid, name }
+    pub fn new(pid: PlayerId, name: String, score: i32, buzzed: bool) -> Self {
+        Self { pid, name, score, buzzed }
     }
 }
