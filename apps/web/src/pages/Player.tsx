@@ -4,8 +4,6 @@ import { useWebSocket } from '../hooks/useWebSocket';
 
 export default function Player() {
   const { code } = useParams<{ code: string }>();
-
-  const [hasJoined, setHasJoined] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Check for existing session
@@ -19,6 +17,17 @@ export default function Player() {
     playerId: existingPlayerId || undefined,
     token: existingToken || undefined,
     onMessage: (message) => {
+      const [type, payload] = Object.entries(message)[0];
+      console.log("Received message:", type, payload);
+      switch (type) {
+        case "NewPlayer":
+          sessionStorage.setItem(`player_id_${code}`, (payload as any).pid);
+          sessionStorage.setItem(
+            `player_token_${code}`,
+            (payload as any).token
+          );
+          break;
+      }
       // const payload = message.payload as Record<string, unknown>;
       // if (message.type === 'ROOM_JOINED') {
       //   sessionStorage.setItem(`player_id_${code}`, payload.playerId as string);
@@ -29,17 +38,9 @@ export default function Player() {
       // } else if (message.type === 'ERROR') {
       //   setError(payload.message as string);
       // }
-      console.log("Received message:", message);
     },
     autoConnect: true,
   });
-
-  // Auto-reconnect if we have existing credentials
-  useEffect(() => {
-    if (existingPlayerId && existingToken) {
-      setHasJoined(true);
-    }
-  }, [existingPlayerId, existingToken]);
 
   return (
     <div className="min-h-screen bg-gray-900 p-4">
@@ -56,17 +57,7 @@ export default function Player() {
         </div>
 
         <div className="bg-gray-800 rounded-lg p-6">
-          {false ? (
-            <>
-              <h2 className="text-lg font-semibold text-white mb-4">
-                Phase: yeah
-              </h2>
-              {/* TODO: Render phase-specific player UI */}
-              <p className="text-gray-400">Waiting for game updates...</p>
-            </>
-          ) : (
-            <p className="text-gray-400 text-center">Waiting for host...</p>
-          )}
+          <p className="text-gray-400 text-center">Waiting for host...</p>
         </div>
       </div>
     </div>
