@@ -84,7 +84,7 @@ async fn ws_socket_handler(
                 Err(e) => Err(e)?
             },
             msg_opt = ws.recv().fuse() => match msg_opt {
-                None => {},
+                None => break,
                 Some(msg) => {
                     let msg = if let Ok(msg) = msg {
                         msg
