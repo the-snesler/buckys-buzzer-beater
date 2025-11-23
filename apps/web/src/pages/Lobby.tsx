@@ -10,7 +10,7 @@ export default function Lobby() {
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (roomCode.length === 4) {
+    if (roomCode.length === 6) {
       navigate(`/play/${roomCode.toUpperCase()}`);
     }
   };
@@ -24,7 +24,7 @@ export default function Lobby() {
       sessionStorage.setItem(`host_token_${roomCode}`, hostToken);
       navigate(`/host/${roomCode}`);
     } catch (err) {
-      setError('Failed to create room');
+      setError("Failed to create room");
     } finally {
       setIsCreating(false);
     }
@@ -43,13 +43,13 @@ export default function Lobby() {
             type="text"
             value={roomCode}
             onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-            maxLength={4}
-            placeholder="ABCD"
+            maxLength={6}
+            placeholder="67ABCD"
             className="w-full px-4 py-3 rounded bg-gray-700 text-white text-center text-2xl tracking-widest uppercase"
           />
           <button
             type="submit"
-            disabled={roomCode.length !== 4}
+            disabled={roomCode.length !== 6}
             className="w-full mt-4 px-4 py-3 bg-blue-600 text-white rounded font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Join Game

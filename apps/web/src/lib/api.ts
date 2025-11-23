@@ -17,7 +17,8 @@ export async function createRoom(): Promise<CreateRoomResponse> {
     throw new Error("Failed to create room");
   }
 
-  return response.json();
+  const { room_code: roomCode, host_token: hostToken } = await response.json();
+  return { roomCode, hostToken };
 }
 
 export function getWebSocketUrl(
