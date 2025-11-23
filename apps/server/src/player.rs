@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::error::SendError;
+use tokio_mpmc::{ChannelError, Sender};
 
 use crate::{
     ConnectionStatus,
@@ -10,25 +10,24 @@ pub type PlayerId = u32;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Player {
-    pid: PlayerId,
-    name: String,
-    score: i32,
-    buzzed: bool,
+    pub pid: PlayerId,
+    pub name: String,
+    pub score: i32,
+    pub buzzed: bool,
 }
 
-#[derive(Debug)]
 pub struct PlayerEntry {
-    player: Player,
-    channel: WsMsgChannel,
-    status: ConnectionStatus,
-    latencies: [u32; 5],
+    pub player: Player,
+    pub sender: Sender<WsMsg>,
+    pub status: ConnectionStatus,
+    pub latencies: [u32; 5],
 }
 
 impl PlayerEntry {
-    pub fn new(player: Player, channel: WsMsgChannel) -> Self {
+    pub fn new(player: Player, sender: Sender<WsMsg>) -> Self {
         Self {
             player,
-            channel,
+            sender,
             latencies: [0; 5],
             status: ConnectionStatus::Connected,
         }
@@ -38,14 +37,19 @@ impl PlayerEntry {
         self.player.buzzed
     }
 
-    pub async fn update(&self, msg: &WsMsg) -> Result<(), SendError<WsMsg>> {
-        self.channel.0.send(msg.clone()).await?;
+    pub async fn update(&self, msg: &WsMsg) -> Result<(), ChannelError> {
+        self.sender.send(msg.clone()).await?;
         Ok(())
     }
 }
 
 impl Player {
     pub fn new(pid: PlayerId, name: String, score: i32, buzzed: bool) -> Self {
-        Self { pid, name, score, buzzed }
+        Self {
+            pid,
+            name,
+            score,
+            buzzed,
+        }
     }
 }

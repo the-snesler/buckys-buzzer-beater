@@ -8,7 +8,7 @@ use axum::{
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
     response::Response,
-    routing::{get, post, any},
+    routing::{any, get, post},
 };
 
 use futures::{FutureExt, select};
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_mpmc::channel;
 
-use crate::{game::Room, player::*, ws_msg::WsMsg};
+use crate::{game::Room, host::HostEntry, player::*, ws_msg::WsMsg};
 
 mod game;
 mod host;
@@ -83,7 +83,10 @@ async fn create_room(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Cr
 
     (
         StatusCode::CREATED,
-        Json(CreateRoomResponse { room_code: code, host_token }),
+        Json(CreateRoomResponse {
+            room_code: code,
+            host_token,
+        }),
     )
 }
 
@@ -148,10 +151,37 @@ async fn ws_socket_handler(
     }: WsQuery,
 ) -> anyhow::Result<()> {
     // for debugging
-    println!("{} {:?} {:?} {:?}", code, token, player_name, player_id);
+    println!("{:?} {:?} {:?} {:?}", code, token, player_name, player_id);
     let ch: tokio_mpmc::Receiver<WsMsg>;
-    (_, ch) = channel(10);
-    let all_chans: Vec<tokio_mpmc::Sender<WsMsg>> = vec![];
+    let tx: tokio_mpmc::Sender<WsMsg>;
+    (tx, ch) = channel(20);
+    {
+        let mut room_map = state.room_map.lock().await;
+        let room = room_map
+            .get_mut(&code)
+            .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
+
+        match (player_id, token, player_name) {
+            (Some(id), Some(t), Some(name)) => {
+                if t == room.host_token {
+                    let host = HostEntry::new(id, tx);
+                    room.host = Some(host);
+                } else {
+                    let player = PlayerEntry::new(Player::new(id, name, 0, false), tx);
+                    room.players.push(player);
+                }
+            },
+            (_, _, Some(name)) => {
+                let player = PlayerEntry::new(Player::new((room.players.len() + 1).try_into().unwrap(), name, 0, false), tx);
+                room.players.push(player);
+            }
+            _ => {}
+        }
+
+        for player in &room.players {
+            println!("player: {}", player.player.pid);
+        }
+    }
     loop {
         select! {
             res = ch.recv().fuse() => match res {
@@ -183,8 +213,18 @@ async fn ws_socket_handler(
                         | WsMsg::BuzzDisable
                         | WsMsg::Buzz) = msg.clone() {
                         let witness = WsMsg::Witness { msg: Box::new(m) };
-                        for other_ch in &all_chans {
-                            other_ch.send(witness.clone()).await?;
+                        let mut room_map = state.room_map.lock().await;
+                        let room = room_map
+                            .get_mut(&code)
+                            .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
+                        for player in &room.players {
+                            if let Some(id) = player_id {
+                                if player.player.pid == id {
+                                    continue;
+                                }
+                            }
+                            let s = &player.sender;
+                            s.send(witness.clone()).await?;
                         }
                     };
                     let mut room_map = state.room_map.lock().await;
@@ -218,7 +258,9 @@ async fn main() {
         .route("/health", get(|| async { "Server is up" }))
         .nest("/api/v1", api_routes);
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", HOST, PORT)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", HOST, PORT))
+        .await
+        .unwrap();
     println!("Server running on http://{}:{}", HOST, PORT);
     axum::serve(listener, app).await.unwrap();
 }
