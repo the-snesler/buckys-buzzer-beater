@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, thread, time::Duration};
 
 use anyhow::anyhow;
 use axum::{
@@ -20,7 +20,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_mpmc::channel;
 
-use crate::{game::{GameState, Room}, host::HostEntry, player::*, ws_msg::WsMsg};
+use crate::{
+    game::{GameState, Room},
+    host::HostEntry,
+    player::*,
+    ws_msg::WsMsg,
+};
 
 mod game;
 mod game_file;
@@ -129,8 +134,8 @@ struct RoomParams {
 #[derive(Deserialize)]
 struct WsQuery {
     #[serde(rename = "playerName")]
-    player_name: Option<String>,    // only players include player_name
-    token: Option<String>,          // only rejoining players include both token & player_id
+    player_name: Option<String>, // only players include player_name
+    token: Option<String>, // only rejoining players include both token & player_id
     #[serde(rename = "playerID")]
     player_id: Option<u32>,
 }
@@ -316,19 +321,27 @@ async fn ws_socket_handler(
                             .get_mut(&code)
                             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
                         for player in &room.players {
-                            if let Some(id) = connection_player_id {
-                                if player.player.pid == id {
-                                    continue;
+                            let cpid = player.player.pid.clone();
+                            let csender = player.sender.clone();
+                            let lat: u64 = player.latency().into();
+                            let witnessc = witness.clone();
+                            let latc = lat.clone();
+                            tokio::spawn(async move {
+                                if let Some(id) = connection_player_id {
+                                    if cpid == id {
+                                        return Ok(());
+                                    }
                                 }
-                            }
-                            let s = &player.sender;
-                            s.send(witness.clone()).await?;
+                                let s = csender;
+                                tokio::time::sleep(Duration::from_millis(500 - latc)).await;
+                                s.send(witnessc).await
+                            });
                         }
                     };
                     // heartbeat case
                     if let WsMsg::Heartbeat { hbid, .. } = msg.clone() {
                         tx_internal.send(WsMsg::GotHeartbeat { hbid }).await?;
-                        continue;
+                        //continue;
                     }
                     // everything else
                     let mut room_map = state.room_map.lock().await;
@@ -343,11 +356,12 @@ async fn ws_socket_handler(
     Ok(())
 }
 
-#[debug_handler]
+//#[debug_handler]
 async fn cpr_handler(
     State(state): State<Arc<AppState>>,
-    Path(RoomParams { code }): Path<RoomParams>,
+    Path(rp @ RoomParams { .. }): Path<RoomParams>,
 ) -> String {
+    let code = rp.code;
     let res = {
         let mut room_map = state.room_map.lock().await;
         let room_res = room_map
