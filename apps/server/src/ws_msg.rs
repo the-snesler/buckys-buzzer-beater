@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use crate::{HeartbeatId, UnixMs, player::Player};
+use crate::{player::{Player, PlayerId}, HeartbeatId, UnixMs};
 
 pub type WsMsgChannel = (Sender<WsMsg>, Receiver<WsMsg>);
 
@@ -9,6 +9,7 @@ pub type WsMsgChannel = (Sender<WsMsg>, Receiver<WsMsg>);
 pub enum WsMsg {
     Witness { msg: Box<WsMsg> },
     PlayerList { list: Vec<Player> },
+    NewPlayer { pid: PlayerId, token: String },
     StartGame,
     EndGame,
     BuzzEnable,
