@@ -11,6 +11,7 @@ use axum::{
     routing::{any, get, post},
 };
 use axum_macros::debug_handler;
+use tower_http::services::{ServeDir, ServeFile};
 
 use futures::{FutureExt, select};
 use http::StatusCode;
@@ -399,9 +400,11 @@ async fn main() {
     let api_routes = Router::new().nest("/rooms", room_routes);
 
     let app = Router::new()
-        .route("/", get(|| async { "Hello, World!" }))
         .route("/health", get(|| async { "Server is up" }))
-        .nest("/api/v1", api_routes);
+        .nest("/api/v1", api_routes)
+        .fallback_service(
+            ServeDir::new("public").not_found_service(ServeFile::new("public/index.html")),
+        );
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", HOST, PORT))
         .await
