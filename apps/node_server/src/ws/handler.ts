@@ -12,6 +12,7 @@ import {
   isHostChoice,
   isHostReady,
 } from "./messages";
+import { getEligiblePlayers } from "../game/gameMachine";
 
 // Handle WebSocket upgrade request
 export function handleUpgrade(
@@ -97,10 +98,26 @@ export function handleOpen(ws: GameWebSocket): void {
     return;
   }
 
+  if (!isHost) {
+    // if they could buzz in right now, send BuzzEnabled
+    const snapshot = room.gameActor?.getSnapshot();
+    if (
+      snapshot &&
+      room.buzzingEnabled &&
+      getEligiblePlayers(
+        snapshot.context.players,
+        snapshot.context.excludedPlayers
+      ).some((p) => p.pid === playerId)
+    ) {
+      ws.send(JSON.stringify({ BuzzEnabled: {} }));
+    }
+  }
+
   if (isHost) {
     room.connectHost(ws);
     // Send current player list to host
     room.sendPlayerList();
+    room.sendGameStateToHost();
     console.log(`Host connected to room ${roomCode}`);
   } else if (playerId !== undefined) {
     const player = room.getPlayer(playerId);
@@ -115,7 +132,9 @@ export function handleOpen(ws: GameWebSocket): void {
       });
       // Update host with new player list
       room.sendPlayerList();
-      console.log(`Player ${player.name} (${playerId}) connected to room ${roomCode}`);
+      console.log(
+        `Player ${player.name} (${playerId}) connected to room ${roomCode}`
+      );
     }
   }
 }
