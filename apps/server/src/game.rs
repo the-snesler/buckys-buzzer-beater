@@ -52,10 +52,12 @@ impl Room {
         self.players.push(PlayerEntry::new(player, sender));
     }
 
-    pub fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) {
+    pub async fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) -> anyhow::Result<()> {
         match msg {
             WsMsg::PlayerList { .. } => {
-                self.update(msg, pid);
+                if let Some(host) = &self.host {
+                    host.sender.send(msg.clone()).await?;
+                }
             }
             WsMsg::HostChecked { correct } => {
                 match correct {
@@ -105,6 +107,7 @@ impl Room {
             WsMsg::LatencyOfHeartbeat { hbid, t_lat } => todo!(),
             _ => {}
         }
+        Ok(())
     }
 }
 
