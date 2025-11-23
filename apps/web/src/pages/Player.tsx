@@ -36,6 +36,9 @@ export default function Player() {
         case "BuzzDisabled":
           setCanBuzz(false);
           break;
+        case "AnswerResult":
+          setHasBuzzed(false);
+          break;
       }
     },
     autoConnect: true,

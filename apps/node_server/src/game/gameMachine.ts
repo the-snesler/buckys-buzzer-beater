@@ -52,7 +52,7 @@ function hasQuestionsRemaining(categories: Category[]): boolean {
 }
 
 // Helper to get eligible players who can still buzz
-function getEligiblePlayers(
+export function getEligiblePlayers(
   players: PlayerState[],
   excludedPlayers: number[]
 ): PlayerState[] {
@@ -68,13 +68,21 @@ export const gameMachine = setup({
   },
   guards: {
     questionsRemain: ({ context }) => hasQuestionsRemaining(context.categories),
-    noQuestionsRemain: ({ context }) => !hasQuestionsRemaining(context.categories),
+    noQuestionsRemain: ({ context }) =>
+      !hasQuestionsRemaining(context.categories),
     playersCanStillBuzz: ({ context }) => {
-      const eligible = getEligiblePlayers(context.players, context.excludedPlayers);
+      const eligible = getEligiblePlayers(
+        context.players,
+        context.excludedPlayers
+      );
+      console.log("Eligible players for buzzing:", eligible);
       return eligible.length > 0;
     },
     allPlayersBuzzed: ({ context }) => {
-      const eligible = getEligiblePlayers(context.players, context.excludedPlayers);
+      const eligible = getEligiblePlayers(
+        context.players,
+        context.excludedPlayers
+      );
       return eligible.length === 0;
     },
   },
@@ -95,11 +103,20 @@ export const gameMachine = setup({
     }),
     awardPoints: assign({
       players: ({ context }) => {
-        if (context.currentBuzzer === null || context.currentQuestion === null) {
+        console.log(
+          "Awarding points to current buzzer:",
+          context.currentBuzzer,
+          context.currentQuestion
+        );
+        if (
+          context.currentBuzzer === null ||
+          context.currentQuestion === null
+        ) {
           return context.players;
         }
         const [catIdx, qIdx] = context.currentQuestion;
-        const pointValue = context.categories[catIdx]?.questions[qIdx]?.value ?? 0;
+        const pointValue =
+          context.categories[catIdx]?.questions[qIdx]?.value ?? 0;
         return context.players.map((p) =>
           p.pid === context.currentBuzzer
             ? { ...p, score: p.score + pointValue }
@@ -142,6 +159,8 @@ export const gameMachine = setup({
         if (context.currentBuzzer === null) return context.excludedPlayers;
         return [...context.excludedPlayers, context.currentBuzzer];
       },
+    }),
+    clearCurrentBuzzer: assign({
       currentBuzzer: () => null,
     }),
     clearCurrentQuestion: assign({
@@ -152,7 +171,10 @@ export const gameMachine = setup({
     addPlayer: assign({
       players: ({ context, event }) => {
         if (event.type !== "ADD_PLAYER") return context.players;
-        return [...context.players, { pid: event.pid, name: event.name, score: 0 }];
+        return [
+          ...context.players,
+          { pid: event.pid, name: event.name, score: 0 },
+        ];
       },
     }),
     removePlayer: assign({
@@ -198,7 +220,7 @@ export const gameMachine = setup({
       on: {
         PLAYER_BUZZ: {
           target: "answer",
-          actions: "recordBuzz",
+          actions: ["recordBuzz", "excludeCurrentBuzzer"],
         },
       },
     },
@@ -220,7 +242,7 @@ export const gameMachine = setup({
           {
             target: "waitingForBuzz",
             guard: "playersCanStillBuzz",
-            actions: "excludeCurrentBuzzer",
+            actions: ["clearCurrentBuzzer"]
           },
           {
             target: "gameEnd",

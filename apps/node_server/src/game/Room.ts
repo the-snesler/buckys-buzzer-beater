@@ -7,6 +7,7 @@ import {
   type Category,
   type GameContext,
   type GameEvent,
+  getEligiblePlayers,
 } from "./gameMachine";
 
 export class Room {
@@ -18,7 +19,7 @@ export class Room {
   buzzingEnabled: boolean;
   currentBuzzer: number | null;
   private nextPid: number;
-  private gameActor: Actor<typeof gameMachine> | null = null;
+  gameActor: Actor<typeof gameMachine> | null = null;
   private categories: Category[] = [];
 
   constructor(code: string, hostToken: string, categories: Category[] = []) {
@@ -143,9 +144,10 @@ export class Room {
     if (!this.gameActor || !this.hostWs) return;
 
     const snapshot = this.gameActor.getSnapshot();
-    const stateName = typeof snapshot.value === "string"
-      ? snapshot.value
-      : Object.keys(snapshot.value)[0] ?? "unknown";
+    const stateName =
+      typeof snapshot.value === "string"
+        ? snapshot.value
+        : Object.keys(snapshot.value)[0] ?? "unknown";
 
     this.sendToHost({
       GameState: createGameStateSnapshot(stateName, snapshot.context),
@@ -202,7 +204,8 @@ export class Room {
       const snapshot = this.gameActor.getSnapshot();
       if (player && snapshot.context.currentQuestion) {
         const [catIdx, qIdx] = snapshot.context.currentQuestion;
-        const pointValue = this.categories[catIdx]?.questions[qIdx]?.value ?? 100;
+        const pointValue =
+          this.categories[catIdx]?.questions[qIdx]?.value ?? 100;
         player.addScore(pointValue);
 
         this.broadcastToAll({
@@ -217,6 +220,11 @@ export class Room {
 
     this.gameActor.send({ type: "HOST_CORRECT" });
     this.currentBuzzer = null;
+
+    // Reset buzz ability for all players
+    for (const player of this.players.values()) {
+      player.resetBuzz();
+    }
 
     // Check if game ended
     const snapshot = this.gameActor.getSnapshot();
@@ -276,13 +284,21 @@ export class Room {
 
   // Buzzing management
   enableBuzzing(): void {
+    if (!this.gameActor) return;
+
     this.buzzingEnabled = true;
     this.currentBuzzer = null;
-    // Reset buzz ability for all players
-    for (const player of this.players.values()) {
-      player.resetBuzz();
+
+    const snapshot = this.gameActor.getSnapshot();
+    for (const player of getEligiblePlayers(
+      snapshot.context.players,
+      snapshot.context.excludedPlayers
+    )) {
+      const p = this.players.get(player.pid);
+      if (p) {
+        p.send({ BuzzEnabled: {} });
+      }
     }
-    this.broadcastToAll({ BuzzEnabled: {} });
   }
 
   disableBuzzing(): void {
