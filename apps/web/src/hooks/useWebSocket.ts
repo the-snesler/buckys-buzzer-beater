@@ -29,6 +29,7 @@ export function useWebSocket({
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  const lastHeartbeatRef = useRef<number>(0);
   const onMessageRef = useRef(onMessage);
 
   // Keep onMessage ref updated
@@ -40,7 +41,7 @@ export function useWebSocket({
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     // Build query params
-    const params: Record<string, string> = { };
+    const params: Record<string, string> = {};
     if (token) params.token = token;
     if (playerName) params.playerName = playerName;
     if (playerId) params.playerID = playerId;
@@ -51,12 +52,12 @@ export function useWebSocket({
 
     ws.onopen = () => {
       setIsConnected(true);
-      console.log('WebSocket connected');
+      console.log("WebSocket connected");
     };
 
     ws.onclose = () => {
       setIsConnected(false);
-      console.log('WebSocket disconnected');
+      console.log("WebSocket disconnected");
 
       // Attempt reconnection after 2 seconds
       reconnectTimeoutRef.current = window.setTimeout(() => {
@@ -67,15 +68,28 @@ export function useWebSocket({
     };
 
     ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+      console.error("WebSocket error:", error);
     };
 
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data) as NetworkMessage;
+        const [type, payload] = Object.entries(message)[0];
+        if (type === "DoHeartbeat") {
+          const t_dohb_recv = Date.now();
+          ws.send(JSON.stringify({ Heartbeat: { t_dohb_recv } }));
+          lastHeartbeatRef.current = t_dohb_recv;
+          return;
+        }
+        if (type === "GotHeartbeat") {
+          const hbid = (payload as any).hbid;
+          const t_lat = Date.now() - lastHeartbeatRef.current;
+          ws.send(JSON.stringify({ LatencyOfHeartbeat: { hbid, t_lat } }));
+          return;
+        }
         onMessageRef.current(message);
       } catch (err) {
-        console.error('Failed to parse message:', err);
+        console.error("Failed to parse message:", err);
       }
     };
 
