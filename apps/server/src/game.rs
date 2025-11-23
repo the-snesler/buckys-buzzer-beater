@@ -208,7 +208,9 @@ impl Room {
                         if let Some(category) = self.categories.get(cat_idx) {
                             if let Some(question) = category.questions.get(q_idx) {
                                 if let Some(buzzer_id) = self.current_buzzer {
-                                    if let Some(player) = self.players.iter_mut().find(|p| p.player.pid == buzzer_id) {
+                                    if let Some(player) =
+                                        self.players.iter_mut().find(|p| p.player.pid == buzzer_id)
+                                    {
                                         player.player.score -= question.value as i32;
                                     }
                                 }
@@ -247,7 +249,9 @@ impl Room {
             WsMsg::Heartbeat { hbid, t_dohb_recv } => {
                 if let Some(entry) = own_entry {
                     if !entry.on_know_dohb_recv(*hbid, *t_dohb_recv) {
-                        println!("WARN: failed to update DoHeartbeat recv time")
+                        println!("WARN: failed to update DoHeartbeat recv time");
+                    } else {
+                        println!("successfully updated dohb_recv");
                     }
                 } else {
                     println!("WARN: own entry missing handling Heartbeat, continuing anyway")
@@ -278,9 +282,9 @@ impl Room {
     }
 
     fn has_remaining_questions(&self) -> bool {
-        self.categories.iter().any(|cat| {
-            cat.questions.iter().any(|q| !q.answered)
-        })
+        self.categories
+            .iter()
+            .any(|cat| cat.questions.iter().any(|q| !q.answered))
     }
 }
 
