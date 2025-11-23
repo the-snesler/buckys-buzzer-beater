@@ -43,7 +43,7 @@ export function useWebSocket({
     const params: Record<string, string> = { };
     if (token) params.token = token;
     if (playerName) params.playerName = playerName;
-    if (playerId) params.playerId = playerId;
+    if (playerId) params.playerID = playerId;
 
     const url = getWebSocketUrl(roomCode, params);
     console.log(url);
