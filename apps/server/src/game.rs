@@ -1,14 +1,20 @@
+use serde::{Deserialize, Serialize};
+use tokio_mpmc::Sender;
+
 use crate::{
-    host::HostEntry, player::{Player, PlayerId}, ws_msg::{WsMsg, WsMsgChannel}, PlayerEntry
+    PlayerEntry,
+    host::HostEntry,
+    player::{Player, PlayerId},
+    ws_msg::{WsMsg, WsMsgChannel},
 };
 
 pub struct Room {
-    code: String,
-    host_token: String,
-    state: GameState,
-    host: Option<HostEntry>,
-    players: Vec<PlayerEntry>,
-    questions: Vec<String>,
+    pub code: String,
+    pub host_token: String,
+    pub state: GameState,
+    pub host: Option<HostEntry>,
+    pub players: Vec<PlayerEntry>,
+    pub questions: Vec<String>,
 }
 
 impl Room {
@@ -41,12 +47,12 @@ impl Room {
 }
 
 impl Room {
-    pub fn add_player(&mut self, pid: u32, name: String, channel: WsMsgChannel) {
+    pub fn add_player(&mut self, pid: u32, name: String, sender: Sender<WsMsg>) {
         let player = Player::new(pid, name, 0, false);
-        self.players.push(PlayerEntry::new(player, channel));
+        self.players.push(PlayerEntry::new(player, sender));
     }
 
-    pub fn update(&mut self, msg: &WsMsg, pid: PlayerId) {
+    pub fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) {
         match msg {
             WsMsg::PlayerList { .. } => {
                 self.update(msg, pid);
@@ -54,28 +60,27 @@ impl Room {
             WsMsg::HostChecked { correct } => {
                 match correct {
                     // if false, have all players buzzed
-                        // if true, do questions remain?
-                            // if true, selection
-                            // if false, game end
-                        // if false, wait for buzz
-                    // if true, do questions remain?
-                        // if true, selection
-                        // if false, end game
                     false => {
                         match self.players.iter().all(|player| !player.did_buzz()) {
+                            // if true, do questions remain?
                             true => match self.questions.len() {
+                                // if false, game end
                                 0 => self.state = GameState::GameEnd,
+                                // if true, selection
                                 _ => self.state = GameState::Selection,
-                            }
+                            },
+                            // if false, wait for buzz
                             false => self.state = GameState::AwaitingBuzz,
                         }
                     }
+                    // if true, do questions remain?
                     true => {
                         match self.questions.len() {
+                            // if false, end game
                             0 => self.state = GameState::GameEnd,
+                            // if true, selection
                             _ => self.state = GameState::Selection,
                         }
-
                     }
                 }
             }
@@ -93,7 +98,7 @@ impl Room {
             WsMsg::BuzzDisable => todo!(),
             WsMsg::Buzz => {
                 self.state = GameState::Answer(pid);
-            },
+            }
             WsMsg::DoHeartbeat { hbid, t_sent } => todo!(),
             WsMsg::Heartbeat { hbid } => todo!(),
             WsMsg::GotHeartbeat { hbid } => todo!(),
@@ -109,12 +114,12 @@ async fn send_all(players: &[PlayerEntry], msg: &WsMsg) {
     });
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 enum GameState {
     Start,
     Selection,
     QuestionReading,
-    Answer(PlayerId),
+    Answer(Option<PlayerId>),
     AwaitingBuzz,
     GameEnd,
 }
