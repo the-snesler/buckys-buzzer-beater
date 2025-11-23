@@ -1,29 +1,25 @@
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::error::SendError;
+use tokio_mpmc::{ChannelError, Sender};
 
-use crate::{
-    player::PlayerId,
-    ws_msg::{WsMsg, WsMsgChannel},
-};
+use crate::{player::PlayerId, ws_msg::WsMsg};
 
-#[derive(Debug)]
 pub struct HostEntry {
-    pid: u32,
-    channel: WsMsgChannel,
+    pub pid: u32,
+    pub sender: Sender<WsMsg>,
 }
 
 impl HostEntry {
-    pub fn new(pid: u32, channel: WsMsgChannel) -> Self {
-        Self { pid, channel }
+    pub fn new(pid: u32, sender: Sender<WsMsg>) -> Self {
+        Self { pid, sender }
     }
 
-    pub async fn update(&self, msg: WsMsg) -> Result<(), SendError<WsMsg>> {
-        self.channel.0.send(msg).await?;
+    pub async fn update(&self, msg: WsMsg) -> Result<(), ChannelError> {
+        self.sender.send(msg).await?;
         Ok(())
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Host {
-    pid: PlayerId,
+    pub pid: PlayerId,
 }
