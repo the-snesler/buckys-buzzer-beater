@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
+    fmt,
     time::{SystemTime, UNIX_EPOCH},
-    fmt
 };
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,7 @@ pub struct PlayerEntry {
     hbid_counter: u32,
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct TrackedMessageTime {
     pub t_sent: UnixMs,
     pub t_recv: Option<UnixMs>,
@@ -106,7 +107,12 @@ impl PlayerEntry {
     pub fn on_latencyhb(&mut self, hbid: HeartbeatId, t_lathb: u32) -> bool {
         if let Some(dohb) = self.times_doheartbeat.get(&hbid) {
             if let Some(lat_fwd) = dohb.delta_32bit() {
-                let lat = t_lathb - lat_fwd;
+                println!("t_lathb={t_lathb},lat_fwd={lat_fwd}");
+                let lat = if (t_lathb > lat_fwd) {
+                    t_lathb - lat_fwd
+                } else {
+                    0
+                };
                 for i in 1..(self.latencies.len() - 1) {
                     self.latencies[i - 1] = self.latencies[i];
                 }
@@ -142,7 +148,13 @@ impl PlayerEntry {
 
 impl TrackedMessageTime {
     pub fn delta(&self) -> Option<u64> {
-        self.t_recv.map(|x| x - self.t_sent)
+        self.t_recv.map(|x| {
+            if (x > self.t_sent) {
+                x - self.t_sent
+            } else {
+                0
+            }
+        })
     }
 
     pub fn delta_32bit(&self) -> Option<u32> {
