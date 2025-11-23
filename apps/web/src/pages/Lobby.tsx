@@ -109,7 +109,7 @@ export default function Lobby() {
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-900">
       <div className="bg-gray-800 p-8 rounded-lg shadow-xl w-lg">
         <h1 className="text-3xl font-bold text-white text-center mb-8">
-          Bucky's Buzzer Banger
+          Bucky's Buzzer Beater
         </h1>
 
         <form onSubmit={handleJoin} className="mb-6">
@@ -163,7 +163,8 @@ export default function Lobby() {
           />
           {categories && (
             <p className="text-green-400 text-sm mb-2">
-              Loaded {categories.length} categories from {fromBuilder ? 'Game Builder' : fileName}
+              Loaded {categories.length} categories from{" "}
+              {fromBuilder ? "Game Builder" : fileName}
             </p>
           )}
           <button
