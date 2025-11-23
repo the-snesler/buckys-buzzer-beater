@@ -6,6 +6,7 @@ export default function Player() {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
   const [canBuzz, setCanBuzz] = useState(false);
+  const [score, setScore] = useState<number>(0);
   const [hasBuzzed, setHasBuzzed] = useState(false);
 
   // Check for existing session
@@ -38,6 +39,7 @@ export default function Player() {
           };
           setHasBuzzed(playerState.buzzed);
           setCanBuzz(playerState.canBuzz);
+          setScore(playerState.score);
           break;
         case "GameState":
           const gameState = payload as {
@@ -91,6 +93,11 @@ export default function Player() {
             } text-white`}
           >
             {isConnected ? "Connected" : "Reconnecting..."}
+          </div>
+          <div className={`text-2xl font-bold ${
+              score < 0 ? "text-red-500" : score === 0 ? "text-gray-500" : "text-green-400"
+            }`}>
+              ${score}
           </div>
         </div>
 

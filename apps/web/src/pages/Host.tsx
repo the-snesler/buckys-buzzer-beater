@@ -124,7 +124,7 @@ export default function Host() {
           <div className="flex gap-2 items-center">
             <button
               onClick={openDisplayWindow}
-              className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-500 text-sm"
+              className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-500 text-sm"
             >
               Open Display
             </button>
@@ -166,7 +166,7 @@ export default function Host() {
                           className={`w-full py-4 rounded font-bold text-lg ${
                             question.answered
                               ? "bg-gray-700 text-gray-500 cursor-not-allowed"
-                              : "bg-blue-600 text-white hover:bg-blue-500"
+                              : "bg-red-600 text-white hover:bg-red-500"
                           }`}
                         >
                           ${question.value}
@@ -229,7 +229,7 @@ export default function Host() {
                   </span>
                 </p>
                 {buzzedPlayer && (
-                  <p className="text-2xl text-blue-400 mb-6">
+                  <p className="text-2xl text-red-400 mb-6">
                     {buzzedPlayer.name} buzzed in!
                   </p>
                 )}
@@ -258,7 +258,9 @@ export default function Host() {
                   {[...gameState.players].sort((a, b) => b.score - a.score).map((player, idx) => (
                     <div key={player.pid} className={`p-3 rounded ${idx === 0 ? "bg-yellow-600" : "bg-gray-700"}`}>
                       <span className="text-white font-semibold">{idx + 1}. {player.name}</span>
-                      <span className="text-white ml-4">${player.score}</span>
+                      <span className={`ml-4 ${
+                          player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-white"
+                        }`}>${player.score}</span>
                     </div>
                   ))}
                 </div>
@@ -272,7 +274,9 @@ export default function Host() {
                 {gameState.players.map((player) => (
                   <div key={player.pid} className="bg-gray-700 rounded p-3 text-center">
                     <p className="text-white font-semibold">{player.name}</p>
-                    <p className="text-2xl text-green-400">${player.score}</p>
+                    <p className={`text-2xl ${
+                        player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-green-400"
+                      }`}>${player.score}</p>
                   </div>
                 ))}
               </div>
@@ -299,7 +303,7 @@ export default function Host() {
             {playerList.length >= 1 && (
               <button
                 onClick={() => sendMessage({ StartGame: {} })}
-                className="mt-6 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="mt-6 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
               >
                 Start Game
               </button>
