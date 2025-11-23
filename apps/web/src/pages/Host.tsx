@@ -1,9 +1,10 @@
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useState } from "react";
 
 export default function Host() {
   const { code } = useParams<{ code: string }>();
+  const navigate = useNavigate();
   const [playerList, setPlayerList] = useState(
     [] as Array<{ pid: number; name: string }>
   );
@@ -45,6 +46,12 @@ export default function Host() {
     <div className="min-h-screen bg-gray-900 p-8">
       <div className="max-w-4xl mx-auto">
         <div className="flex justify-between items-center mb-8">
+          <button
+            onClick={() => navigate("/")}
+            className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600"
+          >
+            ← Back
+          </button>
           <h1 className="text-3xl font-bold text-white">Room: {code}</h1>
           <div
             className={`px-3 py-1 rounded text-sm ${

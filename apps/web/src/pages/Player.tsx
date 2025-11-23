@@ -1,9 +1,10 @@
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 export default function Player() {
   const { code } = useParams<{ code: string }>();
+  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
   // Check for existing session
@@ -46,6 +47,12 @@ export default function Player() {
     <div className="min-h-screen bg-gray-900 p-4">
       <div className="max-w-md mx-auto">
         <div className="flex justify-between items-center mb-4">
+          <button
+            onClick={() => navigate("/")}
+            className="px-2 py-1 bg-gray-700 text-white rounded text-sm hover:bg-gray-600"
+          >
+            ← Back
+          </button>
           <h1 className="text-xl font-bold text-white">Room: {code}</h1>
           <div
             className={`px-2 py-1 rounded text-xs ${
