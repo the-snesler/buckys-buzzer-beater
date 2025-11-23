@@ -1,9 +1,10 @@
 use axum::{
-    extract::{Path, Query}, routing::{get, post}, Json, Router
+    extract::{Path, Query}, routing::{get, post}, Router
 };
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+
+mod game;
 
 #[derive(Serialize, Deserialize)]
 struct RoomParams {
