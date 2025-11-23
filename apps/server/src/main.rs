@@ -99,11 +99,11 @@ struct RoomParams {
 
 #[derive(Deserialize)]
 struct WsQuery {
-    token: String,
     #[serde(rename = "playerName")]
-    player_name: String,
+    player_name: Option<String>,    // only players include player_name
+    token: Option<String>,          // only rejoining players include both token & player_id
     #[serde(rename = "playerID")]
-    player_id: u32,
+    player_id: Option<u32>,
 }
 
 async fn ws_upgrade_handler(
@@ -142,13 +142,13 @@ async fn ws_socket_handler(
     RoomParams { code }: RoomParams,
     state: Arc<AppState>,
     WsQuery {
-        token,
         player_name,
+        token,
         player_id,
     }: WsQuery,
 ) -> anyhow::Result<()> {
     // for debugging
-    println!("{} {} {} {}", code, token, player_name, player_id);
+    println!("{} {:?} {:?} {:?}", code, token, player_name, player_id);
     let ch: tokio_mpmc::Receiver<WsMsg>;
     (_, ch) = channel(10);
     let all_chans: Vec<tokio_mpmc::Sender<WsMsg>> = vec![];
