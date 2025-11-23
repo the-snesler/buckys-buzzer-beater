@@ -83,7 +83,9 @@ export default function Host() {
           break;
         case "GameState":
           setGameState(payload as GameState);
-          setBuzzedPlayer(null); // Clear buzzed player when state changes
+          if ((payload as GameState).state !== "answer") {
+            setBuzzedPlayer(null); // Clear buzzed player when state changes
+          }
           break;
         case "Buzzed":
           setBuzzedPlayer(payload as { pid: number; name: string });
