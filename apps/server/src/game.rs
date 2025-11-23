@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use tokio_mpmc::Sender;
 
@@ -53,6 +54,12 @@ impl Room {
     }
 
     pub async fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) -> anyhow::Result<()> {
+        let own_entry: Option<&mut PlayerEntry> = if let Some(pid) = pid {
+            let idx = self.players.iter().position(|p| p.player.pid == pid);
+            idx.map(|i| &mut self.players[i])
+        } else {
+            None
+        };
         match msg {
             WsMsg::PlayerList { .. } => {
                 if let Some(host) = &self.host {
@@ -101,10 +108,33 @@ impl Room {
             WsMsg::Buzz => {
                 self.state = GameState::Answer(pid);
             }
-            WsMsg::DoHeartbeat { hbid, t_sent } => todo!(),
-            WsMsg::Heartbeat { hbid } => todo!(),
-            WsMsg::GotHeartbeat { hbid } => todo!(),
-            WsMsg::LatencyOfHeartbeat { hbid, t_lat } => todo!(),
+            WsMsg::Heartbeat { hbid, t_dohb_recv } => {
+                if let Some(entry) = own_entry {
+                    if !entry.on_know_dohb_recv(*hbid, *t_dohb_recv) {
+                        println!("WARN: failed to update DoHeartbeat recv time")
+                    }
+                } else {
+                    println!("WARN: own entry missing handling Heartbeat, continuing anyway")
+                }
+            }
+            WsMsg::LatencyOfHeartbeat { hbid, t_lat } => {
+                if let Some(entry) = own_entry {
+                    if !entry.on_latencyhb(
+                        *hbid,
+                        (*t_lat).try_into().expect(
+                            "LatencyOfHeartbeat latency of heartbeat exceeds 32-bit integer limit",
+                        ),
+                    ) {
+                        println!(
+                            "WARN: handling LatencyOfHeartbeat failed to update latencies, continuing anyway"
+                        );
+                    }
+                } else {
+                    println!(
+                        "WARN: own entry missing while handling LatencyOfHeartbeat, continuing anyway"
+                    );
+                }
+            }
             _ => {}
         }
         Ok(())

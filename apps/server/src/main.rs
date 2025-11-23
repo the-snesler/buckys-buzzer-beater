@@ -7,9 +7,10 @@ use axum::{
         Path, Query, State,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{any, get, post},
 };
+use axum_macros::debug_handler;
 
 use futures::{FutureExt, select};
 use http::StatusCode;
@@ -103,8 +104,8 @@ struct RoomParams {
 #[derive(Deserialize)]
 struct WsQuery {
     #[serde(rename = "playerName")]
-    player_name: Option<String>,    // only players include player_name
-    token: Option<String>,          // only rejoining players include both token & player_id
+    player_name: Option<String>, // only players include player_name
+    token: Option<String>, // only rejoining players include both token & player_id
     #[serde(rename = "playerID")]
     player_id: Option<u32>,
 }
@@ -155,6 +156,7 @@ async fn ws_socket_handler(
     let ch: tokio_mpmc::Receiver<WsMsg>;
     let tx: tokio_mpmc::Sender<WsMsg>;
     (tx, ch) = channel(20);
+    let tx_internal = tx.clone();
     {
         let mut room_map = state.room_map.lock().await;
         let room = room_map
@@ -165,17 +167,29 @@ async fn ws_socket_handler(
             (Some(id), Some(t), Some(name)) => {
                 if t == room.host_token {
                     let host = HostEntry::new(id, tx);
-                    let players: &Vec<Player> = &room.players.iter().clone().map(|entry| entry.player.clone()).collect();
-                    host.sender.send(WsMsg::PlayerList { list: players.clone() }).await?;
+                    let players: &Vec<Player> = &room
+                        .players
+                        .iter()
+                        .clone()
+                        .map(|entry| entry.player.clone())
+                        .collect();
+                    host.sender
+                        .send(WsMsg::PlayerList {
+                            list: players.clone(),
+                        })
+                        .await?;
                     room.host = Some(host);
                 } else {
                     let player = PlayerEntry::new(Player::new(id, name, 0, false), tx);
                     room.players.push(player);
                 }
-            },
+            }
             (_, _, Some(name)) => {
                 // Shouldnt fail conversion I hope
-                let player = PlayerEntry::new(Player::new((room.players.len() + 1).try_into().unwrap(), name, 0, false), tx);
+                let player = PlayerEntry::new(
+                    Player::new((room.players.len() + 1).try_into().unwrap(), name, 0, false),
+                    tx,
+                );
                 room.players.push(player);
             }
             _ => {}
@@ -231,6 +245,12 @@ async fn ws_socket_handler(
                             s.send(witness.clone()).await?;
                         }
                     };
+                    // heartbeat case
+                    if let WsMsg::Heartbeat { hbid, .. } = msg.clone() {
+                        tx_internal.send(WsMsg::GotHeartbeat { hbid }).await?;
+                        continue;
+                    }
+                    // everything else
                     let mut room_map = state.room_map.lock().await;
                     let room = room_map
                         .get_mut(&code)
@@ -243,6 +263,46 @@ async fn ws_socket_handler(
     Ok(())
 }
 
+#[debug_handler]
+async fn cpr_handler(
+    State(state): State<Arc<AppState>>,
+    Path(RoomParams { code }): Path<RoomParams>,
+) -> String {
+    let res = {
+        let mut room_map = state.room_map.lock().await;
+        let room_res = room_map
+            .get_mut(&code)
+            .ok_or_else(|| anyhow!("Room {} does not exist", code));
+        let mut failures = 0_u32;
+        match room_res {
+            Err(e) => Err(e),
+            Ok(room) => {
+                for entry in &mut room.players {
+                    match entry.heartbeat().await {
+                        Ok(()) => {}
+                        Err(e) => {
+                            println!("cpr_handler heartbeat failure, did not panic: {e}");
+                            failures += 1;
+                        }
+                    }
+                }
+                Ok(format!(
+                    "Ok, requested {} heartbeats, {} failed immediately",
+                    room.players.len(),
+                    failures
+                ))
+            }
+        }
+    };
+    match res {
+        Ok(s) => s,
+        Err(e) => {
+            println!("cpr_handler failure, did not panic: {e}");
+            format!("Err, {e}")
+        }
+    }
+}
+
 const HOST: &str = "0.0.0.0";
 const PORT: u16 = 3000;
 
@@ -253,6 +313,7 @@ async fn main() {
     let room_routes = Router::new()
         .route("/create", post(create_room))
         .route("/{code}/ws", any(ws_upgrade_handler))
+        .route("/{code}/cpr", get(cpr_handler))
         .with_state(state);
 
     let api_routes = Router::new().nest("/rooms", room_routes);

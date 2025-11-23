@@ -7,16 +7,33 @@ pub type WsMsgChannel = (Sender<WsMsg>, Receiver<WsMsg>);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum WsMsg {
-    Witness { msg: Box<WsMsg> },
-    PlayerList { list: Vec<Player> },
+    Witness {
+        msg: Box<WsMsg>,
+    },
+    PlayerList {
+        list: Vec<Player>,
+    },
     StartGame,
     EndGame,
     BuzzEnable,
     BuzzDisable,
     Buzz,
-    HostChecked { correct: bool },
-    DoHeartbeat { hbid: HeartbeatId, t_sent: UnixMs },
-    Heartbeat { hbid: HeartbeatId },
-    GotHeartbeat { hbid: HeartbeatId },
-    LatencyOfHeartbeat { hbid: HeartbeatId, t_lat: UnixMs },
+    HostChecked {
+        correct: bool,
+    },
+    DoHeartbeat {
+        hbid: HeartbeatId,
+        t_sent: UnixMs,
+    },
+    Heartbeat {
+        hbid: HeartbeatId,
+        t_dohb_recv: UnixMs,
+    },
+    GotHeartbeat {
+        hbid: HeartbeatId,
+    },
+    LatencyOfHeartbeat {
+        hbid: HeartbeatId,
+        t_lat: UnixMs,
+    },
 }
