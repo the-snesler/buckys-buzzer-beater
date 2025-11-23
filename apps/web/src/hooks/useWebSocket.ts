@@ -42,8 +42,8 @@ export function useWebSocket({
     // Build query params
     const params: Record<string, string> = { };
     if (token) params.token = token;
-    if (playerName) params.name = playerName;
-    if (playerId) params.playerId = playerId;
+    if (playerName) params.playerName = playerName;
+    if (playerId) params.playerID = playerId;
 
     const url = getWebSocketUrl(roomCode, params);
     console.log(url);
