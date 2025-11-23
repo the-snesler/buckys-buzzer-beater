@@ -188,6 +188,7 @@ async fn ws_socket_handler(
     let ch: tokio_mpmc::Receiver<WsMsg>;
     let tx: tokio_mpmc::Sender<WsMsg>;
     (tx, ch) = channel(20);
+    let mut connection_player_id: Option<u32> = player_id;
     {
         let mut room_map = state.room_map.lock().await;
         let room = room_map
@@ -226,6 +227,7 @@ async fn ws_socket_handler(
             }
         } else if let Some(name) = player_name {
             let new_id: u32 = (room.players.len() + 1).try_into().unwrap();
+            connection_player_id = Some(new_id);
             let player_token = generate_player_token();
             let player = PlayerEntry::new(
                 Player::new(new_id, name, 0, false, player_token.clone()),
@@ -244,6 +246,7 @@ async fn ws_socket_handler(
             }
         } else if let Some(tok) = &token {
             if let Some(existing) = room.players.iter_mut().find(|p| p.player.token == *tok) {
+                connection_player_id = Some(existing.player.pid);
                 existing.sender = tx.clone();
 
                 let can_buzz = room.state == GameState::WaitingForBuzz;
@@ -311,7 +314,7 @@ async fn ws_socket_handler(
                             .get_mut(&code)
                             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
                         for player in &room.players {
-                            if let Some(id) = player_id {
+                            if let Some(id) = connection_player_id {
                                 if player.player.pid == id {
                                     continue;
                                 }
@@ -324,7 +327,7 @@ async fn ws_socket_handler(
                     let room = room_map
                         .get_mut(&code)
                         .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-                    room.update(&msg, player_id).await?;
+                    room.update(&msg, connection_player_id).await?;
                 }
             }
         }

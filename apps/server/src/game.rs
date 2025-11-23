@@ -101,11 +101,28 @@ impl Room {
 
         Ok(())
     }
+
+    pub async fn broadcast_player_states(&self) -> anyhow::Result<()> {
+        let can_buzz_state = self.state == GameState::WaitingForBuzz;
+
+        for player_entry in &self.players {
+            let player_state_msg = WsMsg::PlayerState {
+                pid: player_entry.player.pid,
+                buzzed: player_entry.player.buzzed,
+                score: player_entry.player.score,
+                can_buzz: can_buzz_state && !player_entry.player.buzzed,
+            };
+            let _ = player_entry.sender.send(player_state_msg).await;
+        }
+        Ok(())
+    }
+
     pub async fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) -> anyhow::Result<()> {
         match msg {
             WsMsg::StartGame {} => {
                 self.state = GameState::Selection;
                 self.broadcast_state().await?;
+                self.broadcast_player_states().await?;
             }
 
             WsMsg::HostChoice {
@@ -120,11 +137,13 @@ impl Room {
                 }
                 self.state = GameState::QuestionReading;
                 self.broadcast_state().await?;
+                self.broadcast_player_states().await?;
             }
 
             WsMsg::HostReady {} => {
                 self.state = GameState::WaitingForBuzz;
                 self.broadcast_state().await?;
+                self.broadcast_player_states().await?;
             }
 
             WsMsg::Buzz {} => {
@@ -147,6 +166,7 @@ impl Room {
                                 }
 
                                 self.broadcast_state().await?;
+                                self.broadcast_player_states().await?;
                             }
                         }
                     }
@@ -209,11 +229,13 @@ impl Room {
                     }
                 }
                 self.broadcast_state().await?;
+                self.broadcast_player_states().await?;
             }
 
             WsMsg::EndGame {} => {
                 self.state = GameState::GameEnd;
                 self.broadcast_state().await?;
+                self.broadcast_player_states().await?;
             }
 
             _ => {}

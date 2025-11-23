@@ -40,7 +40,8 @@ export default function Player() {
           setCanBuzz(playerState.canBuzz);
           break;
         case "GameState":
-          const gameState = payload as { state: String };
+          const gameState = payload as {
+            state: String };
           if (gameState.state === "waitingForBuzz") {
             setCanBuzz(true);
             setHasBuzzed(false);
