@@ -5,8 +5,8 @@ export function handleCreateRoom(): Response {
   const { code, hostToken } = roomManager.createRoom();
 
   const response: CreateRoomResponse = {
-    code,
-    token: hostToken,
+    room_code: code,
+    host_token: hostToken,
   };
 
   return new Response(JSON.stringify(response), {
