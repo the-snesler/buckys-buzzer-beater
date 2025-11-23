@@ -27,8 +27,8 @@ export interface PlayerInfo {
 
 // Room creation response
 export interface CreateRoomResponse {
-  code: string;
-  token: string;
+  room_code: string;
+  host_token: string;
 }
 
 // ============================================
