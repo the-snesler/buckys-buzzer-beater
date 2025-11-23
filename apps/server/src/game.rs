@@ -48,14 +48,9 @@ impl Room {
 }
 
 impl Room {
-    pub fn add_player(&mut self, pid: u32, name: String, sender: Sender<WsMsg>) {
-        let player = Player::new(pid, name, 0, false);
-        self.players.push(PlayerEntry::new(player, sender));
-    }
-
     pub async fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) -> anyhow::Result<()> {
         match msg {
-            WsMsg::PlayerList { .. } => {
+            WsMsg::PlayerList(_) => {
                 if let Some(host) = &self.host {
                     host.sender.send(msg.clone()).await?;
                 }

@@ -8,7 +8,7 @@ pub type WsMsgChannel = (Sender<WsMsg>, Receiver<WsMsg>);
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum WsMsg {
     Witness { msg: Box<WsMsg> },
-    PlayerList { list: Vec<Player> },
+    PlayerList(Vec<Player>),
     NewPlayer { pid: PlayerId, token: String },
     StartGame,
     EndGame,

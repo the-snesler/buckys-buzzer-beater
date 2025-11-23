@@ -16,6 +16,7 @@ pub struct Player {
     pub name: String,
     pub score: i32,
     pub buzzed: bool,
+    pub token: String,
 }
 
 pub struct PlayerEntry {
@@ -56,12 +57,13 @@ impl PlayerEntry {
 }
 
 impl Player {
-    pub fn new(pid: PlayerId, name: String, score: i32, buzzed: bool) -> Self {
+    pub fn new(pid: PlayerId, name: String, score: i32, buzzed: bool, token: String) -> Self {
         Self {
             pid,
             name,
             score,
             buzzed,
+            token,
         }
     }
 }
