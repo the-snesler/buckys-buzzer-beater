@@ -7,10 +7,40 @@ use crate::{
 
 pub struct Room {
     code: String,
+    host_token: String,
     state: GameState,
-    host: HostEntry,
+    host: Option<HostEntry>,
     players: Vec<PlayerEntry>,
     questions: Vec<String>,
+}
+
+impl Room {
+    pub fn new(code: String, host_token: String) -> Self {
+        Self {
+            code,
+            host_token,
+            state: GameState::default(),
+            host: None,
+            players: Vec::new(),
+            questions: Vec::new(),
+        }
+    }
+
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    pub fn host_token(&self) -> &str {
+        &self.host_token
+    }
+
+    pub fn set_host(&mut self, host: HostEntry) {
+        self.host = Some(host);
+    }
+
+    pub fn verify_host_token(&self, token: &str) -> bool {
+        self.host_token == token
+    }
 }
 
 impl Room {

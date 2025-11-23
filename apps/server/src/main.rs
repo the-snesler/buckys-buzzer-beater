@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::anyhow;
 use axum::{
-    Router,
+    Json, Router,
     extract::{
         Path, Query, State,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
@@ -13,6 +13,7 @@ use axum::{
 
 use futures::{FutureExt, select};
 use http::StatusCode;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use tokio::sync::Mutex;
@@ -35,6 +36,55 @@ impl AppState {
             room_map: Mutex::new(HashMap::new()),
         }
     }
+}
+
+fn generate_room_code() -> String {
+    const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let mut rng = rand::rng();
+    (0..6)
+        .map(|_| {
+            let idx = rng.random_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
+}
+
+fn generate_host_token() -> String {
+    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut rng = rand::rng();
+    (0..32)
+        .map(|_| {
+            let idx = rng.random_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct CreateRoomResponse {
+    code: String,
+    host_token: String,
+}
+
+async fn create_room(State(state): State<Arc<AppState>>) -> (StatusCode, Json<CreateRoomResponse>) {
+    let mut room_map = state.room_map.lock().await;
+
+    // Generate a unique room code
+    let code = loop {
+        let candidate = generate_room_code();
+        if !room_map.contains_key(&candidate) {
+            break candidate;
+        }
+    };
+
+    let host_token = generate_host_token();
+    let room = Room::new(code.clone(), host_token.clone());
+    room_map.insert(code.clone(), room);
+
+    (
+        StatusCode::CREATED,
+        Json(CreateRoomResponse { code, host_token }),
+    )
 }
 
 #[derive(Debug)]
@@ -157,7 +207,7 @@ async fn main() {
     let state = Arc::new(AppState::new());
 
     let room_routes = Router::new()
-        .route("/create", post(|| async { StatusCode::CREATED }))
+        .route("/create", post(create_room))
         .route("/{code}/ws", get(ws_upgrade_handler))
         .with_state(state);
 
