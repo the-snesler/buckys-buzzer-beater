@@ -8,7 +8,7 @@ use axum::{
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
     response::Response,
-    routing::{get, post},
+    routing::{get, post, any},
 };
 
 use futures::{FutureExt, select};
@@ -208,7 +208,7 @@ async fn main() {
 
     let room_routes = Router::new()
         .route("/create", post(create_room))
-        .route("/{code}/ws", get(ws_upgrade_handler))
+        .route("/{code}/ws", any(ws_upgrade_handler))
         .with_state(state);
 
     let api_routes = Router::new().nest("/rooms", room_routes);
