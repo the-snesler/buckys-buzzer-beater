@@ -1,7 +1,5 @@
-use std::sync::{Arc, mpsc};
-
 use axum::{
-    Json, Router,
+    Router,
     extract::{
         Path, Query,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
@@ -9,14 +7,26 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+
 use futures::{FutureExt, select};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 
 use tokio_mpmc;
 use tokio_mpmc::channel;
 
+use crate::{player::*, ws_msg::WsMsg};
+
+mod game;
+mod player;
+mod host;
+mod ws_msg;
+
+#[derive(Debug)]
+enum ConnectionStatus {
+    Connected,
+    Disconnected,
+}
 #[derive(Serialize, Deserialize)]
 struct RoomParams {
     code: String,
@@ -84,7 +94,7 @@ async fn ws_socket_handler(
                 Err(e) => Err(e)?
             },
             msg_opt = ws.recv().fuse() => match msg_opt {
-                None => {},
+                None => break,
                 Some(msg) => {
                     let msg = if let Ok(msg) = msg {
                         msg
@@ -136,7 +146,8 @@ async fn main() {
         .route("/create", post(|| async { StatusCode::CREATED }))
         .route("/{code}/ws", get(ws_upgrade_handler));
 
-    let api_routes = Router::new().nest("/rooms", room_routes);
+    let api_routes = Router::new()
+        .nest("/rooms", room_routes);
 
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
@@ -147,31 +158,5 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-type PlayerId = u32;
 type HeartbeatId = u32;
 type UnixMs = u64; // # of milliseconds since unix epoch, or delta thereof
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct PlayerEntry {
-    pid: PlayerId,
-    name: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-enum WsMsg {
-    Witness { msg: Box<WsMsg> },
-    PlayerList { list: Vec<PlayerEntry> },
-    StartGame,
-    EndGame,
-    BuzzEnable,
-    BuzzDisable,
-    Buzz,
-    DoHeartbeat { hbid: HeartbeatId, t_sent: UnixMs },
-    Heartbeat { hbid: HeartbeatId },
-    GotHeartbeat { hbid: HeartbeatId },
-    LatencyOfHeartbeat { hbid: HeartbeatId, t_lat: UnixMs },
-}
-
-async fn json() -> Json<Value> {
-    Json(json!({ "data": 42 }))
-}
