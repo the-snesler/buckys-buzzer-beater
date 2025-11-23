@@ -1,14 +1,23 @@
 use axum::{
-    Json, Router,
-    extract::ws::{WebSocket, WebSocketUpgrade},
-    extract::{Path, Query}, routing::{get, post}, Router
-    routing::{get, post},
+    extract::{ws::{WebSocket, WebSocketUpgrade}, Path, Query}, response::IntoResponse, routing::{get, post}, Json, Router
 };
+
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::player::*;
+
 mod game;
+mod player;
+mod host;
+mod ws_msg;
+
+#[derive(Debug)]
+enum ConnectionStatus {
+    Connected,
+    Disconnected,
+}
 
 #[derive(Serialize, Deserialize)]
 struct RoomParams {
@@ -92,30 +101,8 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-type PlayerId = u32;
 type HeartbeatId = u32;
 type UnixMs = u64; // # of milliseconds since unix epoch, or delta thereof
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct PlayerEntry {
-    pid: PlayerId,
-    name: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-enum WsMsg {
-    Witness { msg: Box<WsMsg> },
-    PlayerList { list: Vec<PlayerEntry> },
-    StartGame,
-    EndGame,
-    BuzzEnable,
-    BuzzDisable,
-    Buzz,
-    DoHeartbeat { hbid: HeartbeatId, t_sent: UnixMs },
-    Heartbeat { hbid: HeartbeatId },
-    GotHeartbeat { hbid: HeartbeatId },
-    LatencyOfHeartbeat { hbid: HeartbeatId, t_lat: UnixMs },
-}
 
 async fn json() -> Json<Value> {
     Json(json!({ "data": 42 }))
