@@ -46,9 +46,9 @@ pub enum WsMsg {
     Buzz {},
     Buzzed { pid: PlayerId, name: String },
 
-    // Heartbeat
+    // Heartbeats
     DoHeartbeat { hbid: HeartbeatId, t_sent: UnixMs },
-    Heartbeat { hbid: HeartbeatId },
+    Heartbeat { hbid: HeartbeatId, t_dohb_recv: UnixMs },
     GotHeartbeat { hbid: HeartbeatId },
     LatencyOfHeartbeat { hbid: HeartbeatId, t_lat: UnixMs },
 }
