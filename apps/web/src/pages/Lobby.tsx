@@ -119,7 +119,7 @@ export default function Lobby() {
           <button
             type="submit"
             disabled={roomCode.length !== 6 || !playerName.trim()}
-            className="w-full mt-4 px-4 py-3 bg-blue-600 text-white rounded font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full mt-4 px-4 py-3 bg-red-600 text-white rounded font-semibold hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Join Game
           </button>

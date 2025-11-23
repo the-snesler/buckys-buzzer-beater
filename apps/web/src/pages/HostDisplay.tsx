@@ -64,10 +64,10 @@ export default function HostDisplay() {
   // Waiting for connection from host window
   if (!gameState) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-blue-900">
+      <div className="min-h-screen flex items-center justify-center bg-red-900">
         <div className="text-white text-center">
           <h1 className="text-4xl font-bold mb-4">Room: {code}</h1>
-          <p className="text-2xl text-blue-300 animate-pulse">
+          <p className="text-2xl text-red-300 animate-pulse">
             Waiting for host to connect...
           </p>
         </div>
@@ -76,11 +76,11 @@ export default function HostDisplay() {
   }
 
   return (
-    <div className="min-h-screen flex items-stretch pb-24 justify-stretch bg-blue-900 p-8">
+    <div className="min-h-screen flex items-stretch pb-24 justify-stretch bg-red-900 p-8">
       <div className="m-8 w-full h-full">
         {/* Selection State - Show game board */}
         {gameState.state === "selection" && (
-          <div className="bg-blue-800 rounded-lg p-6">
+          <div className="bg-red-800 rounded-lg p-6">
             <div
               className="grid gap-4 grid-flow-col "
               style={{
@@ -92,7 +92,7 @@ export default function HostDisplay() {
             >
               {gameState.categories.map((category, catIdx) => (
                 <React.Fragment key={catIdx}>
-                  <h3 className="text-center text-yellow-400 font-bold text-lg uppercase py-4 bg-blue-700 rounded">
+                  <h3 className="text-center text-yellow-400 font-bold text-lg uppercase py-4 bg-red-700 rounded">
                     {category.title}
                   </h3>
                   {category.questions.map((question, qIdx) => (
@@ -100,8 +100,8 @@ export default function HostDisplay() {
                       key={qIdx}
                       className={`w-full py-6 rounded font-bold text-2xl text-center ${
                         question.answered
-                          ? "bg-blue-900 text-blue-700"
-                          : "bg-blue-600 text-yellow-400"
+                          ? "bg-red-900 text-red-700"
+                          : "bg-red-600 text-yellow-400"
                       }`}
                     >
                       {question.answered ? "" : `$${question.value}`}
@@ -201,7 +201,7 @@ export default function HostDisplay() {
                     className={`p-6 rounded-lg flex justify-between items-center ${
                       idx === 0
                         ? "bg-yellow-500 text-black"
-                        : "bg-blue-700 text-white"
+                        : "bg-red-700 text-white"
                     }`}
                   >
                     <span className="text-3xl font-bold">
@@ -216,7 +216,7 @@ export default function HostDisplay() {
 
         {/* Scoreboard - Always visible at bottom */}
         {gameState.state !== "gameEnd" && (
-          <div className="fixed bottom-0 left-0 right-0 bg-blue-950 p-4">
+          <div className="fixed bottom-0 left-0 right-0 bg-red-950 p-4">
             <div className="max-w-6xl mx-auto flex justify-center gap-8">
               {gameState.players.map((player) => (
                 <div
@@ -224,7 +224,7 @@ export default function HostDisplay() {
                   className={`px-6 py-3 rounded text-center ${
                     buzzedPlayer?.pid === player.pid
                       ? "bg-yellow-500 text-black"
-                      : "bg-blue-800 text-white"
+                      : "bg-red-800 text-white"
                   }`}
                 >
                   <p className="font-semibold text-lg">{player.name}</p>
