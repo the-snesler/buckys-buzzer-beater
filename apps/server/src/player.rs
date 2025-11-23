@@ -1,6 +1,5 @@
-use std::sync::mpsc::SendError;
-
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::error::SendError;
 
 use crate::{
     ConnectionStatus,
@@ -33,8 +32,8 @@ impl PlayerEntry {
         }
     }
 
-    pub fn update(&self, msg: &WsMsg) -> Result<(), SendError<WsMsg>> {
-        self.channel.0.send(msg.clone())?;
+    pub async fn update(&self, msg: &WsMsg) -> Result<(), SendError<WsMsg>> {
+        self.channel.0.send(msg.clone()).await?;
         Ok(())
     }
 }
