@@ -258,7 +258,9 @@ export default function Host() {
                   {[...gameState.players].sort((a, b) => b.score - a.score).map((player, idx) => (
                     <div key={player.pid} className={`p-3 rounded ${idx === 0 ? "bg-yellow-600" : "bg-gray-700"}`}>
                       <span className="text-white font-semibold">{idx + 1}. {player.name}</span>
-                      <span className="text-white ml-4">${player.score}</span>
+                      <span className={`ml-4 ${
+                          player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-white"
+                        }`}>${player.score}</span>
                     </div>
                   ))}
                 </div>
@@ -272,7 +274,9 @@ export default function Host() {
                 {gameState.players.map((player) => (
                   <div key={player.pid} className="bg-gray-700 rounded p-3 text-center">
                     <p className="text-white font-semibold">{player.name}</p>
-                    <p className="text-2xl text-green-400">${player.score}</p>
+                    <p className={`text-2xl ${
+                        player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-green-400"
+                      }`}>${player.score}</p>
                   </div>
                 ))}
               </div>

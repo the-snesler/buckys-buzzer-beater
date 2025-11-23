@@ -207,7 +207,9 @@ export default function HostDisplay() {
                     <span className="text-3xl font-bold">
                       {idx + 1}. {player.name}
                     </span>
-                    <span className="text-3xl">${player.score}</span>
+                    <span className={`text-3xl ${
+                        player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : ""
+                      }`}>${player.score}</span>
                   </div>
                 ))}
             </div>
@@ -228,7 +230,9 @@ export default function HostDisplay() {
                   }`}
                 >
                   <p className="font-semibold text-lg">{player.name}</p>
-                  <p className="text-2xl font-bold">${player.score}</p>
+                  <p className={`text-2xl font-bold ${
+                      player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : ""
+                    }`}>${player.score}</p>
                 </div>
               ))}
             </div>
