@@ -1,6 +1,5 @@
-use std::sync::mpsc::SendError;
-
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::error::SendError;
 
 use crate::{
     player::PlayerId,
@@ -14,8 +13,8 @@ pub struct HostEntry {
 }
 
 impl HostEntry {
-    pub fn update(&self, msg: WsMsg) -> Result<(), SendError<WsMsg>> {
-        self.channel.0.send(msg)?;
+    pub async fn update(&self, msg: WsMsg) -> Result<(), SendError<WsMsg>> {
+        self.channel.0.send(msg).await?;
         Ok(())
     }
 }
