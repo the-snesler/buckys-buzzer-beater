@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_mpmc::channel;
 
-use crate::{game::Room, host::HostEntry, player::*, ws_msg::WsMsg};
+use crate::{game::{GameState, Room}, host::HostEntry, player::*, ws_msg::WsMsg};
 
 mod game;
 mod game_file;
@@ -189,6 +189,7 @@ async fn ws_socket_handler(
     let ch: tokio_mpmc::Receiver<WsMsg>;
     let tx: tokio_mpmc::Sender<WsMsg>;
     (tx, ch) = channel(20);
+    let mut connection_player_id: Option<u32> = player_id;
     let tx_internal = tx.clone();
     {
         let mut room_map = state.room_map.lock().await;
@@ -206,7 +207,16 @@ async fn ws_socket_handler(
         } else if let (Some(id), Some(_tok)) = (player_id, &token) {
             if let Some(existing) = room.players.iter_mut().find(|p| p.player.pid == id) {
                 // Update existing player's send channel
-                existing.sender = tx;
+                existing.sender = tx.clone();
+
+                let can_buzz = room.state == GameState::WaitingForBuzz;
+                let player_state_msg = WsMsg::PlayerState {
+                    pid: existing.player.pid,
+                    buzzed: existing.player.buzzed,
+                    score: existing.player.score,
+                    can_buzz,
+                };
+                tx.send(player_state_msg).await?;
             } else {
                 return Err(anyhow!(
                     "Player with ID {} could not be found in room {}",
@@ -219,6 +229,7 @@ async fn ws_socket_handler(
             }
         } else if let Some(name) = player_name {
             let new_id: u32 = (room.players.len() + 1).try_into().unwrap();
+            connection_player_id = Some(new_id);
             let player_token = generate_player_token();
             let player = PlayerEntry::new(
                 Player::new(new_id, name, 0, false, player_token.clone()),
@@ -237,7 +248,18 @@ async fn ws_socket_handler(
             }
         } else if let Some(tok) = &token {
             if let Some(existing) = room.players.iter_mut().find(|p| p.player.token == *tok) {
-                existing.sender = tx;
+                connection_player_id = Some(existing.player.pid);
+                existing.sender = tx.clone();
+
+                let can_buzz = room.state == GameState::WaitingForBuzz;
+                let player_state_msg = WsMsg::PlayerState {
+                    pid: existing.player.pid,
+                    buzzed: existing.player.buzzed,
+                    score: existing.player.score,
+                    can_buzz,
+                };
+
+                tx.send(player_state_msg).await?;
             } else {
                 return Err(anyhow!("Invalid player token"));
             }
@@ -294,7 +316,7 @@ async fn ws_socket_handler(
                             .get_mut(&code)
                             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
                         for player in &room.players {
-                            if let Some(id) = player_id {
+                            if let Some(id) = connection_player_id {
                                 if player.player.pid == id {
                                     continue;
                                 }
@@ -313,7 +335,7 @@ async fn ws_socket_handler(
                     let room = room_map
                         .get_mut(&code)
                         .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-                    room.update(&msg, player_id).await?;
+                    room.update(&msg, connection_player_id).await?;
                 }
             }
         }
