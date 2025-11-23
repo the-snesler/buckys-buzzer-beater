@@ -1,12 +1,21 @@
+use std::sync::{Arc, mpsc};
+
 use axum::{
     Json, Router,
-    extract::ws::{WebSocket, WebSocketUpgrade},
-    extract::{Path, Query},
+    extract::{
+        Path, Query,
+        ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
+    },
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures::{FutureExt, select};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use tokio_mpmc;
+use tokio_mpmc::channel;
 
 #[derive(Serialize, Deserialize)]
 struct RoomParams {
@@ -30,9 +39,9 @@ async fn ws_upgrade_handler(
         player_name,
         player_id,
     }): Query<WsQuery>,
-) {
-    ws_upgrade.on_upgrade(|ws| {
-        ws_socket_handler(
+) -> Response {
+    ws_upgrade.on_upgrade(async |ws| {
+        match ws_socket_handler(
             ws,
             rp,
             WsQuery {
@@ -41,7 +50,14 @@ async fn ws_upgrade_handler(
                 player_id,
             },
         )
-    });
+        .await
+        {
+            Ok(()) => {}
+            Err(e) => {
+                println!("WebSocket handler failed (died but didn't panic): {e}");
+            }
+        }
+    })
 }
 
 async fn ws_socket_handler(
@@ -52,24 +68,66 @@ async fn ws_socket_handler(
         player_name,
         player_id,
     }: WsQuery,
-) -> anyhow::Result<impl IntoResponse> {
-    while let Some(msg) = socket.recv().await {
-        let msg = if let Ok(msg) = msg {
-                msg
-            } else {
-                // client disconnected
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::HostUnreachable,
-                    "websocket client disconnected in read"
-                ));
-            };
-        // deser
-        let msg: WsMsg = serde_json::from_str(&msg)?;
-        // witness case
-        match 
-    }
-    // witness case
+) -> anyhow::Result<()> {
+    // for debugging
     println!("{} {} {} {}", code, token, player_name, player_id);
+    let ch: tokio_mpmc::Receiver<WsMsg>;
+    (_, ch) = channel(10);
+    let all_chans: Vec<tokio_mpmc::Sender<WsMsg>> = vec![];
+    loop {
+        select! {
+            res = ch.recv().fuse() => match res {
+                Ok(recv) => {
+                    let ser = serde_json::to_string(&recv)?;
+                    ws.send(Message::Text(Utf8Bytes::from(ser))).await?;
+                },
+                Err(e) => Err(e)?
+            },
+            msg_opt = ws.recv().fuse() => match msg_opt {
+                None => {},
+                Some(msg) => {
+                    let msg = if let Ok(msg) = msg {
+                        msg
+                    } else {
+                        // client disconnected
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::HostUnreachable,
+                            "websocket client disconnected in read",
+                        ))?
+                    };
+                    let msg: String = msg.into_text()?.to_string();
+                    // deser
+                    let msg: WsMsg = serde_json::from_str(&msg)?;
+                    // witness case, just for now
+                    match msg.clone() {
+                        m @ (WsMsg::StartGame
+                        | WsMsg::EndGame
+                        | WsMsg::BuzzEnable
+                        | WsMsg::BuzzDisable
+                        | WsMsg::Buzz { .. }) => {
+                            let witness = WsMsg::Witness { msg: Box::new(m) };
+                            for other_ch in &all_chans {
+                                other_ch.send(witness.clone()).await?;
+                            }
+                        }
+                        _ => {}
+                    }
+                    match msg {
+                        WsMsg::StartGame => {},
+                        WsMsg::EndGame => {},
+                        WsMsg::BuzzEnable => {},
+                        WsMsg::BuzzDisable => {},
+                        WsMsg::Buzz => {},
+                        WsMsg::Heartbeat { hbid } => {},
+                        WsMsg::LatencyOfHeartbeat { hbid, t_lat } => {},
+                        _ => {}
+                    }
+                    ()
+                },
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
