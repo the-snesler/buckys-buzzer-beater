@@ -1,6 +1,5 @@
-use std::sync::mpsc::{Receiver, Sender};
-
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{HeartbeatId, UnixMs, player::Player};
 
