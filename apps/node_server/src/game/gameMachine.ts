@@ -52,6 +52,7 @@ function hasQuestionsRemaining(categories: Category[]): boolean {
 }
 
 // Helper to get eligible players who can still buzz
+// TODO: what about disconnected players?
 export function getEligiblePlayers(
   players: PlayerState[],
   excludedPlayers: number[]
