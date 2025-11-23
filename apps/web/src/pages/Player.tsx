@@ -56,17 +56,7 @@ export default function Player() {
         </div>
 
         <div className="bg-gray-800 rounded-lg p-6">
-          {false ? (
-            <>
-              <h2 className="text-lg font-semibold text-white mb-4">
-                Phase: yeah
-              </h2>
-              {/* TODO: Render phase-specific player UI */}
-              <p className="text-gray-400">Waiting for game updates...</p>
-            </>
-          ) : (
-            <p className="text-gray-400 text-center">Waiting for host...</p>
-          )}
+          <p className="text-gray-400 text-center">Waiting for host...</p>
         </div>
       </div>
     </div>
