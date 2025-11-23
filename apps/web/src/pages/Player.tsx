@@ -29,6 +29,16 @@ export default function Player() {
             (payload as any).token
           );
           break;
+        case "PlayerState":
+          const playerState = payload as {
+            pid: number;
+            buzzed: boolean;
+            score: number;
+            canBuzz: boolean;
+          };
+          setHasBuzzed(playerState.buzzed);
+          setCanBuzz(playerState.canBuzz);
+          break;
         case "GameState":
           const gameState = payload as { state: String };
           if (gameState.state === "waitingForBuzz") {

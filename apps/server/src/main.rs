@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_mpmc::channel;
 
-use crate::{game::Room, host::HostEntry, player::*, ws_msg::WsMsg};
+use crate::{game::{GameState, Room}, host::HostEntry, player::*, ws_msg::WsMsg};
 
 mod game;
 mod game_file;
@@ -204,7 +204,16 @@ async fn ws_socket_handler(
         } else if let (Some(id), Some(_tok)) = (player_id, &token) {
             if let Some(existing) = room.players.iter_mut().find(|p| p.player.pid == id) {
                 // Update existing player's send channel
-                existing.sender = tx;
+                existing.sender = tx.clone();
+
+                let can_buzz = room.state == GameState::WaitingForBuzz;
+                let player_state_msg = WsMsg::PlayerState {
+                    pid: existing.player.pid,
+                    buzzed: existing.player.buzzed,
+                    score: existing.player.score,
+                    can_buzz,
+                };
+                tx.send(player_state_msg).await?;
             } else {
                 return Err(anyhow!(
                     "Player with ID {} could not be found in room {}",
@@ -235,7 +244,17 @@ async fn ws_socket_handler(
             }
         } else if let Some(tok) = &token {
             if let Some(existing) = room.players.iter_mut().find(|p| p.player.token == *tok) {
-                existing.sender = tx;
+                existing.sender = tx.clone();
+
+                let can_buzz = room.state == GameState::WaitingForBuzz;
+                let player_state_msg = WsMsg::PlayerState {
+                    pid: existing.player.pid,
+                    buzzed: existing.player.buzzed,
+                    score: existing.player.score,
+                    can_buzz,
+                };
+
+                tx.send(player_state_msg).await?;
             } else {
                 return Err(anyhow!("Invalid player token"));
             }

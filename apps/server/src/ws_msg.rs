@@ -22,6 +22,14 @@ pub enum WsMsg {
         current_buzzer: Option<PlayerId>,
     },
 
+    PlayerState {
+        pid: PlayerId,
+        buzzed: bool,
+        score: i32,
+        #[serde(rename = "canBuzz")]
+        can_buzz: bool,
+    },
+
     // Host Actions
     #[serde(alias = "StartGame")]
     StartGame {},
