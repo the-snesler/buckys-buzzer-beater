@@ -37,11 +37,6 @@ pub struct TrackedMessageTime {
     pub t_recv: Option<UnixMs>,
 }
 
-pub struct TrackedMessageTime {
-    pub t_sent: UnixMs,
-    pub t_recv: Option<UnixMs>,
-}
-
 impl fmt::Debug for PlayerEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlayerEntry")

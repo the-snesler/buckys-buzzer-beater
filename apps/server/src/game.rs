@@ -241,15 +241,6 @@ impl Room {
 
             WsMsg::EndGame {} => {
                 self.state = GameState::GameEnd;
-            }
-            // After host is done reading
-            WsMsg::BuzzEnable => {
-                // prolly start timer
-                self.state = GameState::AwaitingBuzz;
-            }
-            WsMsg::BuzzDisable => todo!(),
-            WsMsg::Buzz => {
-                self.state = GameState::Answer(pid);
                 self.broadcast_state().await?;
                 self.broadcast_player_states().await?;
             }
