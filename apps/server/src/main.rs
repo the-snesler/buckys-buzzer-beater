@@ -4,7 +4,7 @@ use axum::{
         Path, Query,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{get, post},
 };
 
@@ -12,14 +12,13 @@ use futures::{FutureExt, select};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use tokio_mpmc;
 use tokio_mpmc::channel;
 
 use crate::{player::*, ws_msg::WsMsg};
 
 mod game;
-mod player;
 mod host;
+mod player;
 mod ws_msg;
 
 #[derive(Debug)]
@@ -109,18 +108,15 @@ async fn ws_socket_handler(
                     // deser
                     let msg: WsMsg = serde_json::from_str(&msg)?;
                     // witness case, just for now
-                    match msg.clone() {
-                        m @ (WsMsg::StartGame
+                    if let m @ (WsMsg::StartGame
                         | WsMsg::EndGame
                         | WsMsg::BuzzEnable
                         | WsMsg::BuzzDisable
-                        | WsMsg::Buzz { .. }) => {
-                            let witness = WsMsg::Witness { msg: Box::new(m) };
-                            for other_ch in &all_chans {
-                                other_ch.send(witness.clone()).await?;
-                            }
+                        | WsMsg::Buzz) = msg.clone() {
+                        let witness = WsMsg::Witness { msg: Box::new(m) };
+                        for other_ch in &all_chans {
+                            other_ch.send(witness.clone()).await?;
                         }
-                        _ => {}
                     }
                     match msg {
                         WsMsg::StartGame => {},
@@ -132,7 +128,7 @@ async fn ws_socket_handler(
                         WsMsg::LatencyOfHeartbeat { hbid, t_lat } => {},
                         _ => {}
                     }
-                    ()
+
                 },
             }
         }
@@ -146,8 +142,7 @@ async fn main() {
         .route("/create", post(|| async { StatusCode::CREATED }))
         .route("/{code}/ws", get(ws_upgrade_handler));
 
-    let api_routes = Router::new()
-        .nest("/rooms", room_routes);
+    let api_routes = Router::new().nest("/rooms", room_routes);
 
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))

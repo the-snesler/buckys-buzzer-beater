@@ -1,4 +1,9 @@
-use crate::{host::HostEntry, player::Player, ws_msg::{WsMsg, WsMsgChannel}, PlayerEntry};
+use crate::{
+    PlayerEntry,
+    host::HostEntry,
+    player::Player,
+    ws_msg::{WsMsg, WsMsgChannel},
+};
 
 struct Room {
     code: String,
@@ -18,24 +23,24 @@ impl Room {
         match msg {
             WsMsg::Witness { msg } => {
                 send_all(&self.players, msg);
-            },
+            }
             WsMsg::PlayerList { .. } => {
                 self.update(msg);
-            },
+            }
             WsMsg::StartGame => {
                 send_all(&self.players, msg);
                 self.state = GameState::Selection;
-            },
+            }
             WsMsg::EndGame => {
                 send_all(&self.players, msg);
                 self.state = GameState::GameEnd;
-            },
+            }
             // After host is done reading
             WsMsg::BuzzEnable => {
                 send_all(&self.players, msg);
                 // prolly start timer
                 self.state = GameState::AwaitingBuzz;
-            },
+            }
             WsMsg::BuzzDisable => todo!(),
             WsMsg::Buzz => todo!(),
             WsMsg::DoHeartbeat { hbid, t_sent } => todo!(),

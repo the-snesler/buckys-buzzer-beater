@@ -2,7 +2,10 @@ use std::sync::mpsc::SendError;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{player::PlayerId, ws_msg::{WsMsg, WsMsgChannel}};
+use crate::{
+    player::PlayerId,
+    ws_msg::{WsMsg, WsMsgChannel},
+};
 
 #[derive(Debug)]
 pub struct HostEntry {
