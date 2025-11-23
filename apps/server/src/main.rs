@@ -165,6 +165,8 @@ async fn ws_socket_handler(
             (Some(id), Some(t), Some(name)) => {
                 if t == room.host_token {
                     let host = HostEntry::new(id, tx);
+                    let players: &Vec<Player> = &room.players.iter().clone().map(|entry| entry.player.clone()).collect();
+                    host.sender.send(WsMsg::PlayerList { list: players.clone() }).await?;
                     room.host = Some(host);
                 } else {
                     let player = PlayerEntry::new(Player::new(id, name, 0, false), tx);
@@ -172,6 +174,7 @@ async fn ws_socket_handler(
                 }
             },
             (_, _, Some(name)) => {
+                // Shouldnt fail conversion I hope
                 let player = PlayerEntry::new(Player::new((room.players.len() + 1).try_into().unwrap(), name, 0, false), tx);
                 room.players.push(player);
             }
