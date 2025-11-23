@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useWebSocket } from "../hooks/useWebSocket";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 interface Question {
   question: string;
@@ -34,7 +34,40 @@ export default function Host() {
   const [playerList, setPlayerList] = useState<PlayerState[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [buzzedPlayer, setBuzzedPlayer] = useState<{ pid: number; name: string } | null>(null);
+  const displayWindowRef = useRef<Window | null>(null);
   const hostToken = sessionStorage.getItem(`host_token_${code}`);
+
+  // Forward game state to display popup
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      console.log("Host received message:", event.data);
+      if (event.data && event.data.type === "displayReady") {
+        // Send current game state when display is ready
+        if (displayWindowRef.current && !displayWindowRef.current.closed) {
+          displayWindowRef.current.postMessage(
+            { gameState, buzzedPlayer },
+            "*"
+          );
+        }
+      }
+    };
+
+    if (displayWindowRef.current && !displayWindowRef.current.closed) {
+      displayWindowRef.current.postMessage({ gameState, buzzedPlayer }, "*");
+    }
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [gameState, buzzedPlayer]);
+
+  const openDisplayWindow = () => {
+    const popup = window.open(
+      `/host/${code}/display`,
+      "hostDisplay",
+      "width=1280,height=720"
+    );
+    displayWindowRef.current = popup;
+    popup?.postMessage({ gameState, buzzedPlayer }, "*");
+  };
 
   const { isConnected, sendMessage } = useWebSocket({
     roomCode: code!,
@@ -88,12 +121,20 @@ export default function Host() {
             ← Back
           </button>
           <h1 className="text-3xl font-bold text-white">Room: {code}</h1>
-          <div
-            className={`px-3 py-1 rounded text-sm ${
-              isConnected ? "bg-green-600" : "bg-red-600"
-            } text-white`}
-          >
-            {isConnected ? "Connected" : "Disconnected"}
+          <div className="flex gap-2 items-center">
+            <button
+              onClick={openDisplayWindow}
+              className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-500 text-sm"
+            >
+              Open Display
+            </button>
+            <div
+              className={`px-3 py-1 rounded text-sm ${
+                isConnected ? "bg-green-600" : "bg-red-600"
+              } text-white`}
+            >
+              {isConnected ? "Connected" : "Disconnected"}
+            </div>
           </div>
         </div>
 
