@@ -9,6 +9,8 @@ import {
   isBuzz,
   isHostChecked,
   isHeartbeat,
+  isHostChoice,
+  isHostReady,
 } from "./messages";
 
 // Handle WebSocket upgrade request
@@ -164,8 +166,19 @@ function handleHostMessage(
     room.disableBuzzing();
     console.log(`Buzzing disabled in room ${room.code}`);
   } else if (isHostChecked(msg)) {
-    room.handleHostChecked(msg.HostChecked.correct);
+    // Use the new state machine methods
+    if (msg.HostChecked.correct) {
+      room.handleHostCorrect();
+    } else {
+      room.handleHostIncorrect();
+    }
     console.log(`Host checked answer: ${msg.HostChecked.correct}`);
+  } else if (isHostChoice(msg)) {
+    room.handleHostChoice(msg.HostChoice.categoryIndex, msg.HostChoice.questionIndex);
+    console.log(`Host selected question: category ${msg.HostChoice.categoryIndex}, question ${msg.HostChoice.questionIndex}`);
+  } else if (isHostReady(msg)) {
+    room.handleHostReady();
+    console.log(`Host ready for buzzing in room ${room.code}`);
   }
 }
 
@@ -181,7 +194,12 @@ function handlePlayerMessage(
   if (!player) return;
 
   if (isBuzz(msg)) {
-    const success = room.handleBuzz(playerId);
+    // Try state machine buzz first (if game is running)
+    let success = room.handlePlayerBuzz(playerId);
+    // Fall back to old buzz handler if state machine not active
+    if (!success) {
+      success = room.handleBuzz(playerId);
+    }
     if (success) {
       console.log(`Player ${player.name} buzzed in room ${room.code}`);
     }

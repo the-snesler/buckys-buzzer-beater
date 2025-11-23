@@ -12,7 +12,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const server = Bun.serve<WSData>({
   port: PORT,
 
-  fetch(req, server) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     const pathname = url.pathname;
 
@@ -22,7 +22,7 @@ const server = Bun.serve<WSData>({
     }
 
     // Handle room routes
-    const roomResponse = handleRoomRoutes(req, pathname);
+    const roomResponse = await handleRoomRoutes(req, pathname);
     if (roomResponse) {
       return roomResponse;
     }

@@ -1,11 +1,9 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useState, useEffect } from 'react';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 export default function Player() {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
-  const [error, setError] = useState<string | null>(null);
 
   // Check for existing session
   const existingPlayerName = sessionStorage.getItem(`player_name`);

@@ -1,5 +1,13 @@
 import type { GameWebSocket, GameState, OutboundMessage } from "../types";
 import { Player } from "./Player";
+import { createActor, type Actor } from "xstate";
+import {
+  gameMachine,
+  createGameStateSnapshot,
+  type Category,
+  type GameContext,
+  type GameEvent,
+} from "./gameMachine";
 
 export class Room {
   code: string;
@@ -10,8 +18,10 @@ export class Room {
   buzzingEnabled: boolean;
   currentBuzzer: number | null;
   private nextPid: number;
+  private gameActor: Actor<typeof gameMachine> | null = null;
+  private categories: Category[] = [];
 
-  constructor(code: string, hostToken: string) {
+  constructor(code: string, hostToken: string, categories: Category[] = []) {
     this.code = code;
     this.hostToken = hostToken;
     this.hostWs = null;
@@ -20,6 +30,7 @@ export class Room {
     this.buzzingEnabled = false;
     this.currentBuzzer = null;
     this.nextPid = 1;
+    this.categories = categories;
   }
 
   // Host management
@@ -90,12 +101,177 @@ export class Room {
   // Game state management
   startGame(): void {
     this.gameState = "playing";
+
+    // Create initial context with current players
+    const initialPlayers = Array.from(this.players.values()).map((p) => ({
+      pid: p.pid,
+      name: p.name,
+      score: p.score,
+    }));
+
+    // Create the state machine actor
+    this.gameActor = createActor(gameMachine, {
+      input: {
+        categories: this.categories,
+        players: initialPlayers,
+      },
+    });
+
+    // Subscribe to state changes to send GameState to host
+    this.gameActor.subscribe((snapshot) => {
+      this.sendGameStateToHost();
+    });
+
+    // Start the actor
+    this.gameActor.start();
+
     this.broadcastToAll({ GameStarted: {} });
+    this.sendGameStateToHost();
   }
 
   endGame(): void {
     this.gameState = "ended";
+    if (this.gameActor) {
+      this.gameActor.stop();
+      this.gameActor = null;
+    }
     this.broadcastToAll({ GameEnded: {} });
+  }
+
+  // Send current game state to host
+  sendGameStateToHost(): void {
+    if (!this.gameActor || !this.hostWs) return;
+
+    const snapshot = this.gameActor.getSnapshot();
+    const stateName = typeof snapshot.value === "string"
+      ? snapshot.value
+      : Object.keys(snapshot.value)[0] ?? "unknown";
+
+    this.sendToHost({
+      GameState: createGameStateSnapshot(stateName, snapshot.context),
+    });
+  }
+
+  // State machine event handlers
+  handleHostChoice(categoryIndex: number, questionIndex: number): void {
+    if (!this.gameActor) return;
+    this.gameActor.send({ type: "HOST_CHOICE", categoryIndex, questionIndex });
+  }
+
+  handleHostReady(): void {
+    if (!this.gameActor) return;
+    this.gameActor.send({ type: "HOST_READY" });
+    // Enable buzzing when host is ready
+    this.enableBuzzing();
+  }
+
+  handlePlayerBuzz(pid: number): boolean {
+    if (!this.gameActor) return false;
+
+    const snapshot = this.gameActor.getSnapshot();
+    // Only allow buzz in waitingForBuzz state
+    if (snapshot.value !== "waitingForBuzz") return false;
+
+    // Check if player is excluded
+    if (snapshot.context.excludedPlayers.includes(pid)) return false;
+
+    this.gameActor.send({ type: "PLAYER_BUZZ", pid });
+    this.currentBuzzer = pid;
+    this.disableBuzzing();
+
+    // Notify host about the buzz
+    const player = this.players.get(pid);
+    if (player) {
+      this.sendToHost({
+        Buzzed: {
+          pid: player.pid,
+          name: player.name,
+        },
+      });
+    }
+
+    return true;
+  }
+
+  handleHostCorrect(): void {
+    if (!this.gameActor) return;
+
+    // Update player score in our players map
+    if (this.currentBuzzer !== null) {
+      const player = this.players.get(this.currentBuzzer);
+      const snapshot = this.gameActor.getSnapshot();
+      if (player && snapshot.context.currentQuestion) {
+        const [catIdx, qIdx] = snapshot.context.currentQuestion;
+        const pointValue = this.categories[catIdx]?.questions[qIdx]?.value ?? 100;
+        player.addScore(pointValue);
+
+        this.broadcastToAll({
+          AnswerResult: {
+            pid: player.pid,
+            correct: true,
+            newScore: player.score,
+          },
+        });
+      }
+    }
+
+    this.gameActor.send({ type: "HOST_CORRECT" });
+    this.currentBuzzer = null;
+
+    // Check if game ended
+    const snapshot = this.gameActor.getSnapshot();
+    if (snapshot.value === "gameEnd") {
+      this.endGame();
+    }
+  }
+
+  handleHostIncorrect(): void {
+    if (!this.gameActor) return;
+
+    // Notify about incorrect answer
+    if (this.currentBuzzer !== null) {
+      const player = this.players.get(this.currentBuzzer);
+      if (player) {
+        player.disableBuzz();
+        this.broadcastToAll({
+          AnswerResult: {
+            pid: player.pid,
+            correct: false,
+            newScore: player.score,
+          },
+        });
+      }
+    }
+
+    this.gameActor.send({ type: "HOST_INCORRECT" });
+    this.currentBuzzer = null;
+
+    // Check new state
+    const snapshot = this.gameActor.getSnapshot();
+    if (snapshot.value === "waitingForBuzz") {
+      // Re-enable buzzing for remaining players
+      this.enableBuzzing();
+    } else if (snapshot.value === "gameEnd") {
+      this.endGame();
+    }
+  }
+
+  // Sync player to state machine
+  syncPlayerToMachine(pid: number, name: string): void {
+    if (this.gameActor) {
+      this.gameActor.send({ type: "ADD_PLAYER", pid, name });
+    }
+  }
+
+  removePlayerFromMachine(pid: number): void {
+    if (this.gameActor) {
+      this.gameActor.send({ type: "REMOVE_PLAYER", pid });
+    }
+  }
+
+  // Set categories (for when host uploads game config)
+  setCategories(categories: Category[]): void {
+    this.categories = categories;
   }
 
   // Buzzing management

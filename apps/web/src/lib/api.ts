@@ -1,16 +1,33 @@
 const API_BASE = "/api/v1";
 
+export interface Question {
+  question: string;
+  answer: string;
+  value: number;
+  answered: boolean;
+}
+
+export interface Category {
+  title: string;
+  questions: Question[];
+}
+
 export interface CreateRoomResponse {
   roomCode: string;
   hostToken: string;
 }
 
-export async function createRoom(): Promise<CreateRoomResponse> {
+export interface CreateRoomOptions {
+  categories?: Category[];
+}
+
+export async function createRoom(options: CreateRoomOptions = {}): Promise<CreateRoomResponse> {
   const response = await fetch(`${API_BASE}/rooms/create`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
+    body: JSON.stringify(options),
   });
 
   if (!response.ok) {

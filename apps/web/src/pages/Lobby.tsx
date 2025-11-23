@@ -1,6 +1,50 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createRoom } from '../lib/api';
+import { createRoom, type Category } from '../lib/api';
+
+// Sample game configuration for testing
+const SAMPLE_CATEGORIES: Category[] = [
+  {
+    title: "Science",
+    questions: [
+      { question: "What is the chemical symbol for water?", answer: "H2O", value: 100, answered: false },
+      { question: "What planet is known as the Red Planet?", answer: "Mars", value: 200, answered: false },
+      { question: "What is the powerhouse of the cell?", answer: "Mitochondria", value: 300, answered: false },
+      { question: "What is the speed of light in vacuum (in m/s)?", answer: "299,792,458", value: 400, answered: false },
+      { question: "What is the atomic number of Carbon?", answer: "6", value: 500, answered: false },
+    ],
+  },
+  {
+    title: "History",
+    questions: [
+      { question: "In what year did World War II end?", answer: "1945", value: 100, answered: false },
+      { question: "Who was the first President of the United States?", answer: "George Washington", value: 200, answered: false },
+      { question: "What ancient wonder was located in Alexandria?", answer: "The Lighthouse (Pharos)", value: 300, answered: false },
+      { question: "What year did the Berlin Wall fall?", answer: "1989", value: 400, answered: false },
+      { question: "Who was the first Emperor of Rome?", answer: "Augustus", value: 500, answered: false },
+    ],
+  },
+  {
+    title: "Geography",
+    questions: [
+      { question: "What is the capital of France?", answer: "Paris", value: 100, answered: false },
+      { question: "What is the longest river in the world?", answer: "The Nile", value: 200, answered: false },
+      { question: "What is the smallest country in the world?", answer: "Vatican City", value: 300, answered: false },
+      { question: "What mountain range separates Europe from Asia?", answer: "The Ural Mountains", value: 400, answered: false },
+      { question: "What is the deepest ocean trench?", answer: "Mariana Trench", value: 500, answered: false },
+    ],
+  },
+  {
+    title: "Pop Culture",
+    questions: [
+      { question: "What is the name of Harry Potter's owl?", answer: "Hedwig", value: 100, answered: false },
+      { question: "Who directed the movie 'Inception'?", answer: "Christopher Nolan", value: 200, answered: false },
+      { question: "What band performed 'Bohemian Rhapsody'?", answer: "Queen", value: 300, answered: false },
+      { question: "What is the highest-grossing film of all time?", answer: "Avatar", value: 400, answered: false },
+      { question: "Who wrote the 'A Song of Ice and Fire' series?", answer: "George R.R. Martin", value: 500, answered: false },
+    ],
+  },
+];
 
 export default function Lobby() {
   const navigate = useNavigate();
@@ -21,7 +65,9 @@ export default function Lobby() {
     setIsCreating(true);
     setError(null);
     try {
-      const { roomCode, hostToken } = await createRoom();
+      const { roomCode, hostToken } = await createRoom({
+        categories: SAMPLE_CATEGORIES,
+      });
       // Store host token for WebSocket auth
       sessionStorage.setItem(`host_token_${roomCode}`, hostToken);
       navigate(`/host/${roomCode}`);

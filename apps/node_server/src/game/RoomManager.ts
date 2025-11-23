@@ -1,4 +1,5 @@
 import { Room } from "./Room";
+import type { Category } from "./gameMachine";
 
 // Characters to use for room codes (excluding confusing chars like 0, O, I, L)
 const ROOM_CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ";
@@ -28,10 +29,10 @@ class RoomManager {
     return crypto.randomUUID();
   }
 
-  createRoom(): { room: Room; code: string; hostToken: string } {
+  createRoom(categories: Category[] = []): { room: Room; code: string; hostToken: string } {
     const code = this.generateRoomCode();
     const hostToken = this.generateToken();
-    const room = new Room(code, hostToken);
+    const room = new Room(code, hostToken, categories);
     this.rooms.set(code, room);
     return { room, code, hostToken };
   }
