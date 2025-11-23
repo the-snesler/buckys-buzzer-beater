@@ -1,8 +1,12 @@
 import { useParams } from "react-router-dom";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { useState } from "react";
 
 export default function Host() {
   const { code } = useParams<{ code: string }>();
+  const [playerList, setPlayerList] = useState(
+    [] as Array<{ pid: number; name: string }>
+  );
   const hostToken = sessionStorage.getItem(`host_token_${code}`);
 
   const { isConnected, sendMessage } = useWebSocket({
@@ -11,6 +15,16 @@ export default function Host() {
     autoConnect: true,
     onMessage: (message) => {
       console.log("Received message:", message);
+      const [type, payload] = Object.entries(message)[0];
+
+      switch (type) {
+        case "PlayerList":
+          setPlayerList(payload as any);
+          break;
+        // Handle other message types as needed
+        default:
+          break;
+      }
     },
   });
 
@@ -42,13 +56,29 @@ export default function Host() {
         </div>
 
         <div className="bg-gray-800 rounded-lg p-6">
-          <h2 className="text-xl font-semibold text-white mb-4">Phase: yeah</h2>
-
-          {/* TODO: Render phase-specific UI */}
-          <p className="text-gray-400">
-            Game state machine is running. Players can join with code:{" "}
-            <strong>{code}</strong>
-          </p>
+          <h2 className="text-2xl font-semibold text-white mb-4">Players</h2>
+          {playerList.length === 0 ? (
+            <p className="text-gray-400">No players have joined yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {playerList.map((player) => (
+                <li
+                  key={player.pid}
+                  className="bg-gray-700 rounded p-3 text-white"
+                >
+                  {player.name} (ID: {player.pid})
+                </li>
+              ))}
+            </ul>
+          )}
+          {playerList.length >= 2 && (
+            <button
+              onClick={() => sendMessage({ BuzzEnable: {} })}
+              className="mt-6 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              Start Game
+            </button>
+          )}
         </div>
       </div>
     </div>
