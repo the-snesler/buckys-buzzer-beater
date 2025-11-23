@@ -13,6 +13,10 @@ pub struct HostEntry {
 }
 
 impl HostEntry {
+    pub fn new(pid: u32, channel: WsMsgChannel) -> Self {
+        Self { pid, channel }
+    }
+
     pub async fn update(&self, msg: WsMsg) -> Result<(), SendError<WsMsg>> {
         self.channel.0.send(msg).await?;
         Ok(())
