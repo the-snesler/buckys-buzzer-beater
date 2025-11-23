@@ -1,12 +1,14 @@
 use axum::{
     Json, Router,
     extract::ws::{WebSocket, WebSocketUpgrade},
-    extract::{Path, Query},
+    extract::{Path, Query}, routing::{get, post}, Router
     routing::{get, post},
 };
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+mod game;
 
 #[derive(Serialize, Deserialize)]
 struct RoomParams {
@@ -22,9 +24,9 @@ struct WsQuery {
     player_id: String,
 }
 
-async fn ws_upgrade_handler(
+async fn ws_handler(
     ws_upgrade: WebSocketUpgrade,
-    Path(rp @ RoomParams { .. }): Path<RoomParams>,
+    Path(RoomParams { code }): Path<RoomParams>,
     Query(WsQuery {
         token,
         player_name,
@@ -78,7 +80,8 @@ async fn main() {
         .route("/create", post(|| async { StatusCode::CREATED }))
         .route("/{code}/ws", get(ws_upgrade_handler));
 
-    let api_routes = Router::new().nest("/rooms", room_routes);
+    let api_routes = Router::new()
+        .nest("/rooms", room_routes);
 
     let app = Router::new()
         .route("/", get(|| async { "Hello, World!" }))
