@@ -22,6 +22,7 @@ use tokio_mpmc::channel;
 use crate::{game::Room, host::HostEntry, player::*, ws_msg::WsMsg};
 
 mod game;
+mod game_file;
 mod host;
 mod player;
 mod ws_msg;
@@ -60,13 +61,32 @@ fn generate_host_token() -> String {
         .collect()
 }
 
+fn generate_player_token() -> String {
+    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut rng = rand::rng();
+    (0..32)
+        .map(|_| {
+            let idx = rng.random_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
+}
+
 #[derive(Serialize)]
 struct CreateRoomResponse {
     room_code: String,
     host_token: String,
 }
 
-async fn create_room(State(state): State<Arc<AppState>>) -> (StatusCode, Json<CreateRoomResponse>) {
+#[derive(Deserialize)]
+struct CreateRoomRequest {
+    categories: Option<Vec<game::Category>>,
+}
+
+async fn create_room(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateRoomRequest>,
+) -> (StatusCode, Json<CreateRoomResponse>) {
     let mut room_map = state.room_map.lock().await;
 
     // Generate a unique room code
@@ -78,7 +98,12 @@ async fn create_room(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Cr
     };
 
     let host_token = generate_host_token();
-    let room = Room::new(code.clone(), host_token.clone());
+    let mut room = Room::new(code.clone(), host_token.clone());
+
+    if let Some(categories) = body.categories {
+        room.categories = categories;
+    }
+
     room_map.insert(code.clone(), room);
 
     (
@@ -103,8 +128,8 @@ struct RoomParams {
 #[derive(Deserialize)]
 struct WsQuery {
     #[serde(rename = "playerName")]
-    player_name: Option<String>,    // only players include player_name
-    token: Option<String>,          // only rejoining players include both token & player_id
+    player_name: Option<String>, // only players include player_name
+    token: Option<String>, // only rejoining players include both token & player_id
     #[serde(rename = "playerID")]
     player_id: Option<u32>,
 }
@@ -140,6 +165,14 @@ async fn ws_upgrade_handler(
     })
 }
 
+async fn send_player_list_to_host(host: &HostEntry, players: &[PlayerEntry]) -> anyhow::Result<()> {
+    let list: Vec<Player> = players.iter().map(|entry| entry.player.clone()).collect();
+    let msg = WsMsg::PlayerList(list);
+    println!("send_player_list_to_host msg: {:?}", &msg);
+    host.sender.send(msg).await?;
+    Ok(())
+}
+
 async fn ws_socket_handler(
     mut ws: WebSocket,
     RoomParams { code }: RoomParams,
@@ -160,25 +193,57 @@ async fn ws_socket_handler(
         let room = room_map
             .get_mut(&code)
             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
+        println!("room: {:?}", room);
 
-        match (player_id, token, player_name) {
-            (Some(id), Some(t), Some(name)) => {
-                if t == room.host_token {
-                    let host = HostEntry::new(id, tx);
-                    let players: &Vec<Player> = &room.players.iter().clone().map(|entry| entry.player.clone()).collect();
-                    host.sender.send(WsMsg::PlayerList { list: players.clone() }).await?;
-                    room.host = Some(host);
-                } else {
-                    let player = PlayerEntry::new(Player::new(id, name, 0, false), tx);
-                    room.players.push(player);
-                }
-            },
-            (_, _, Some(name)) => {
-                // Shouldnt fail conversion I hope
-                let player = PlayerEntry::new(Player::new((room.players.len() + 1).try_into().unwrap(), name, 0, false), tx);
-                room.players.push(player);
+        let is_host = token.as_ref() == Some(&room.host_token);
+
+        if is_host {
+            let host = HostEntry::new(player_id.unwrap_or(0), tx);
+            send_player_list_to_host(&host, &room.players).await?;
+            room.host = Some(host);
+        } else if let (Some(id), Some(_tok)) = (player_id, &token) {
+            if let Some(existing) = room.players.iter_mut().find(|p| p.player.pid == id) {
+                // Update existing player's send channel
+                existing.sender = tx;
+            } else {
+                return Err(anyhow!(
+                    "Player with ID {} could not be found in room {}",
+                    id,
+                    code
+                ));
             }
-            _ => {}
+            if let Some(host) = &room.host {
+                send_player_list_to_host(host, &room.players).await?;
+            }
+        } else if let Some(name) = player_name {
+            let new_id: u32 = (room.players.len() + 1).try_into().unwrap();
+            let player_token = generate_player_token();
+            let player = PlayerEntry::new(
+                Player::new(new_id, name, 0, false, player_token.clone()),
+                tx.clone(),
+            );
+            room.players.push(player);
+
+            let new_player_msg = WsMsg::NewPlayer {
+                pid: new_id,
+                token: player_token,
+            };
+            tx.send(new_player_msg).await?;
+
+            if let Some(host) = &room.host {
+                send_player_list_to_host(host, &room.players).await?;
+            }
+        } else if let Some(tok) = &token {
+            if let Some(existing) = room.players.iter_mut().find(|p| p.player.token == *tok) {
+                existing.sender = tx;
+            } else {
+                return Err(anyhow!("Invalid player token"));
+            }
+        } else {
+            // Invalid connection
+            return Err(anyhow!(
+                "Invalid connection: must provide player_name (new player) or token (reconnect)"
+            ));
         }
 
         for player in &room.players {
@@ -190,7 +255,12 @@ async fn ws_socket_handler(
             res = ch.recv().fuse() => match res {
                 Ok(recv) => {
                     let ser = serde_json::to_string(&recv)?;
-                    println!("ser {}", ser);
+                    if let Some(r) = &recv {
+                        match &r {
+                            WsMsg::GameState { state, .. } => println!("sending GameState: {:?}", state),
+                            other => println!("sending {:?}", other),
+                        }
+                    }
                     ws.send(Message::Text(Utf8Bytes::from(ser))).await?;
                 },
                 Err(e) => Err(e)?
@@ -211,11 +281,11 @@ async fn ws_socket_handler(
                     // deser
                     let msg: WsMsg = serde_json::from_str(&msg)?;
                     // witness case, just for now
-                    if let m @ (WsMsg::StartGame
-                        | WsMsg::EndGame
-                        | WsMsg::BuzzEnable
-                        | WsMsg::BuzzDisable
-                        | WsMsg::Buzz) = msg.clone() {
+                    if let m @ (WsMsg::StartGame {}
+                        | WsMsg::EndGame {}
+                        | WsMsg::BuzzEnable {}
+                        | WsMsg::BuzzDisable {}
+                        | WsMsg::Buzz {}) = msg.clone() {
                         let witness = WsMsg::Witness { msg: Box::new(m) };
                         let mut room_map = state.room_map.lock().await;
                         let room = room_map
