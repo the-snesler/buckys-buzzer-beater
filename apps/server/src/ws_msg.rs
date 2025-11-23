@@ -2,7 +2,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{player::Player, HeartbeatId, UnixMs};
+use crate::{HeartbeatId, UnixMs, player::Player};
 
 pub type WsMsgChannel = (Sender<WsMsg>, Receiver<WsMsg>);
 
