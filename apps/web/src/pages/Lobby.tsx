@@ -34,7 +34,7 @@ export default function Lobby() {
     <div className="min-h-screen flex items-center justify-center bg-gray-900">
       <div className="bg-gray-800 p-8 rounded-lg shadow-xl max-w-md w-full">
         <h1 className="text-3xl font-bold text-white text-center mb-8">
-          N Of Us Are Lying
+          Bucky's Buzzer Banger
         </h1>
 
         <form onSubmit={handleJoin} className="mb-6">
@@ -62,13 +62,11 @@ export default function Lobby() {
             disabled={isCreating}
             className="w-full px-4 py-3 bg-green-600 text-white rounded font-semibold hover:bg-green-700 disabled:opacity-50"
           >
-            {isCreating ? 'Creating...' : 'Create Room'}
+            {isCreating ? "Creating..." : "Create Room"}
           </button>
         </div>
 
-        {error && (
-          <p className="mt-4 text-red-400 text-center">{error}</p>
-        )}
+        {error && <p className="mt-4 text-red-400 text-center">{error}</p>}
       </div>
     </div>
   );
