@@ -63,6 +63,17 @@ export interface HostCheckedMessage {
   };
 }
 
+export interface HostChoiceMessage {
+  HostChoice: {
+    categoryIndex: number;
+    questionIndex: number;
+  };
+}
+
+export interface HostReadyMessage {
+  HostReady: Record<string, never>;
+}
+
 export interface HeartbeatMessage {
   Heartbeat: {
     hbid: number;
@@ -83,6 +94,8 @@ export type InboundMessage =
   | BuzzDisableMessage
   | BuzzMessage
   | HostCheckedMessage
+  | HostChoiceMessage
+  | HostReadyMessage
   | HeartbeatMessage
   | LatencyOfHeartbeatMessage;
 
@@ -154,6 +167,28 @@ export interface AnswerResultMessage {
   };
 }
 
+export interface GameStateMessage {
+  GameState: {
+    state: string;
+    categories: Array<{
+      title: string;
+      questions: Array<{
+        question: string;
+        answer: string;
+        value: number;
+        answered: boolean;
+      }>;
+    }>;
+    players: Array<{
+      pid: number;
+      name: string;
+      score: number;
+    }>;
+    currentQuestion: [number, number] | null;
+    currentBuzzer: number | null;
+  };
+}
+
 export type OutboundMessage =
   | WitnessMessage
   | NewPlayerMessage
@@ -165,4 +200,5 @@ export type OutboundMessage =
   | GameStartedMessage
   | GameEndedMessage
   | BuzzedMessage
-  | AnswerResultMessage;
+  | AnswerResultMessage
+  | GameStateMessage;

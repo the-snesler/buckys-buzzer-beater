@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createRoom } from '../lib/api';
+import { createRoom, type Category } from '../lib/api';
 
 export default function Lobby() {
   const navigate = useNavigate();
@@ -8,6 +8,56 @@ export default function Lobby() {
   const [playerName, setPlayerName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [categories, setCategories] = useState<Category[] | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setFileName(file.name);
+    setError(null);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+
+        // Validate structure
+        if (!json.game?.single || !Array.isArray(json.game.single)) {
+          throw new Error("Invalid format: expected game.single array");
+        }
+
+        // Transform to Category[] format
+        const transformed: Category[] = json.game.single.map((cat: { category: string; clues: { value: number; clue: string; solution: string }[] }) => {
+          if (!cat.category || !Array.isArray(cat.clues)) {
+            throw new Error("Invalid category format");
+          }
+
+          return {
+            title: cat.category,
+            questions: cat.clues.map((clue) => {
+              if (typeof clue.value !== 'number' || !clue.clue || !clue.solution) {
+                throw new Error("Invalid clue format");
+              }
+              return {
+                question: clue.clue,
+                answer: clue.solution,
+                value: clue.value,
+                answered: false,
+              };
+            }),
+          };
+        });
+
+        setCategories(transformed);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Invalid JSON file");
+        setCategories(null);
+      }
+    };
+    reader.readAsText(file);
+  };
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,10 +68,13 @@ export default function Lobby() {
   };
 
   const handleCreate = async () => {
+    if (!categories) return;
     setIsCreating(true);
     setError(null);
     try {
-      const { roomCode, hostToken } = await createRoom();
+      const { roomCode, hostToken } = await createRoom({
+        categories,
+      });
       // Store host token for WebSocket auth
       sessionStorage.setItem(`host_token_${roomCode}`, hostToken);
       navigate(`/host/${roomCode}`);
@@ -73,10 +126,22 @@ export default function Lobby() {
         </form>
 
         <div className="border-t border-gray-700 pt-6">
+          <label className="block text-gray-300 mb-2">Game File</label>
+          <input
+            type="file"
+            accept=".json"
+            onChange={handleFileUpload}
+            className="w-full px-4 py-3 rounded bg-gray-700 text-white mb-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-gray-600 file:text-white file:cursor-pointer"
+          />
+          {fileName && categories && (
+            <p className="text-green-400 text-sm mb-2">
+              Loaded {categories.length} categories from {fileName}
+            </p>
+          )}
           <button
             onClick={handleCreate}
-            disabled={isCreating}
-            className="w-full px-4 py-3 bg-green-600 text-white rounded font-semibold hover:bg-green-700 disabled:opacity-50"
+            disabled={isCreating || !categories}
+            className="w-full px-4 py-3 bg-green-600 text-white rounded font-semibold hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isCreating ? "Creating..." : "Create Room"}
           </button>

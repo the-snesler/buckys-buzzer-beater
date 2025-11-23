@@ -42,3 +42,13 @@ export function isLatencyOfHeartbeat(
 ): msg is { LatencyOfHeartbeat: { hbid: number; t_lat: number } } {
   return "LatencyOfHeartbeat" in msg;
 }
+
+export function isHostChoice(
+  msg: InboundMessage
+): msg is { HostChoice: { categoryIndex: number; questionIndex: number } } {
+  return "HostChoice" in msg;
+}
+
+export function isHostReady(msg: InboundMessage): msg is { HostReady: Record<string, never> } {
+  return "HostReady" in msg;
+}

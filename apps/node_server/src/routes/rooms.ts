@@ -1,8 +1,24 @@
 import { roomManager } from "../game/RoomManager";
 import type { CreateRoomResponse } from "../types";
+import type { Category } from "../game/gameMachine";
 
-export function handleCreateRoom(): Response {
-  const { code, hostToken } = roomManager.createRoom();
+interface CreateRoomBody {
+  categories?: Category[];
+}
+
+export async function handleCreateRoom(req: Request): Promise<Response> {
+  let categories: Category[] = [];
+
+  try {
+    const body = await req.json() as CreateRoomBody;
+    if (body.categories && Array.isArray(body.categories)) {
+      categories = body.categories;
+    }
+  } catch {
+    // No body or invalid JSON - use empty categories
+  }
+
+  const { code, hostToken } = roomManager.createRoom(categories);
 
   const response: CreateRoomResponse = {
     room_code: code,
@@ -17,15 +33,15 @@ export function handleCreateRoom(): Response {
   });
 }
 
-export function handleRoomRoutes(
+export async function handleRoomRoutes(
   req: Request,
   pathname: string
-): Response | null {
+): Promise<Response | null> {
   const method = req.method;
 
   // POST /api/v1/rooms/create
   if (method === "POST" && pathname === "/api/v1/rooms/create") {
-    return handleCreateRoom();
+    return handleCreateRoom(req);
   }
 
   return null;
