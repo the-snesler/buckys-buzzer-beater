@@ -1,7 +1,10 @@
+use std::{collections::HashMap, sync::Arc};
+
+use anyhow::anyhow;
 use axum::{
     Router,
     extract::{
-        Path, Query,
+        Path, Query, State,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
     response::Response,
@@ -12,14 +15,27 @@ use futures::{FutureExt, select};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
+use tokio::sync::Mutex;
 use tokio_mpmc::channel;
 
-use crate::{player::*, ws_msg::WsMsg};
+use crate::{game::Room, player::*, ws_msg::WsMsg};
 
 mod game;
 mod host;
 mod player;
 mod ws_msg;
+
+struct AppState {
+    room_map: Mutex<HashMap<String, Room>>,
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        Self {
+            room_map: Mutex::new(HashMap::new()),
+        }
+    }
+}
 
 #[derive(Debug)]
 enum ConnectionStatus {
@@ -41,6 +57,7 @@ struct WsQuery {
 }
 
 async fn ws_upgrade_handler(
+    State(state): State<Arc<AppState>>,
     ws_upgrade: WebSocketUpgrade,
     Path(rp @ RoomParams { .. }): Path<RoomParams>,
     Query(WsQuery {
@@ -53,6 +70,7 @@ async fn ws_upgrade_handler(
         match ws_socket_handler(
             ws,
             rp,
+            state,
             WsQuery {
                 token,
                 player_name,
@@ -72,6 +90,7 @@ async fn ws_upgrade_handler(
 async fn ws_socket_handler(
     mut ws: WebSocket,
     RoomParams { code }: RoomParams,
+    state: Arc<AppState>,
     WsQuery {
         token,
         player_name,
@@ -117,19 +136,13 @@ async fn ws_socket_handler(
                         for other_ch in &all_chans {
                             other_ch.send(witness.clone()).await?;
                         }
-                    }
-                    match msg {
-                        WsMsg::StartGame => {},
-                        WsMsg::EndGame => {},
-                        WsMsg::BuzzEnable => {},
-                        WsMsg::BuzzDisable => {},
-                        WsMsg::Buzz => {},
-                        WsMsg::Heartbeat { hbid } => {},
-                        WsMsg::LatencyOfHeartbeat { hbid, t_lat } => {},
-                        _ => {}
-                    }
-
-                },
+                    };
+                    let mut room_map = state.room_map.lock().await;
+                    let room = room_map
+                        .get_mut(&code)
+                        .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
+                    room.update(&msg);
+                }
             }
         }
     }
@@ -141,9 +154,12 @@ const PORT: u16 = 3000;
 
 #[tokio::main]
 async fn main() {
+    let state = Arc::new(AppState::new());
+
     let room_routes = Router::new()
         .route("/create", post(|| async { StatusCode::CREATED }))
-        .route("/{code}/ws", get(ws_upgrade_handler));
+        .route("/{code}/ws", get(ws_upgrade_handler))
+        .with_state(state);
 
     let api_routes = Router::new().nest("/rooms", room_routes);
 

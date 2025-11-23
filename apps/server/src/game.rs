@@ -5,7 +5,7 @@ use crate::{
     ws_msg::{WsMsg, WsMsgChannel},
 };
 
-struct Room {
+pub struct Room {
     code: String,
     state: GameState,
     host: HostEntry,
