@@ -104,7 +104,8 @@ struct RoomParams {
 struct WsQuery {
     token: Option<String>,
     #[serde(rename = "playerName")]
-    player_name: Option<String>,
+    player_name: Option<String>,    // only players include player_name
+    token: Option<String>,          // only rejoining players include both token & player_id
     #[serde(rename = "playerID")]
     player_id: Option<u32>,
 }
@@ -145,8 +146,8 @@ async fn ws_socket_handler(
     RoomParams { code }: RoomParams,
     state: Arc<AppState>,
     WsQuery {
-        token,
         player_name,
+        token,
         player_id,
     }: WsQuery,
 ) -> anyhow::Result<()> {

@@ -5,18 +5,17 @@ import { useWebSocket } from '../hooks/useWebSocket';
 export default function Player() {
   const { code } = useParams<{ code: string }>();
 
-  const [playerName, setPlayerName] = useState('');
-  const [isJoining, setIsJoining] = useState(false);
   const [hasJoined, setHasJoined] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Check for existing session
+  const existingPlayerName = sessionStorage.getItem(`player_name`);
   const existingPlayerId = sessionStorage.getItem(`player_id_${code}`);
   const existingToken = sessionStorage.getItem(`player_token_${code}`);
 
-  const { isConnected, connect } = useWebSocket({
+  const { isConnected } = useWebSocket({
     roomCode: code!,
-    playerName: hasJoined ? playerName : undefined,
+    playerName: existingPlayerName!,
     playerId: existingPlayerId || undefined,
     token: existingToken || undefined,
     onMessage: (message) => {
@@ -30,19 +29,10 @@ export default function Player() {
       // } else if (message.type === 'ERROR') {
       //   setError(payload.message as string);
       // }
+      console.log("Received message:", message);
     },
-    autoConnect: !!existingPlayerId,
+    autoConnect: true,
   });
-
-  const handleJoin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!playerName.trim()) return;
-
-    setIsJoining(true);
-    setError(null);
-    setHasJoined(true);
-    connect();
-  };
 
   // Auto-reconnect if we have existing credentials
   useEffect(() => {
@@ -50,41 +40,6 @@ export default function Player() {
       setHasJoined(true);
     }
   }, [existingPlayerId, existingToken]);
-
-  if (!hasJoined) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-900">
-        <div className="bg-gray-800 p-8 rounded-lg shadow-xl max-w-md w-full">
-          <h1 className="text-2xl font-bold text-white text-center mb-2">
-            Join Room
-          </h1>
-          <p className="text-gray-400 text-center mb-6">Code: {code}</p>
-
-          <form onSubmit={handleJoin}>
-            <label className="block text-gray-300 mb-2">Your Name</label>
-            <input
-              type="text"
-              value={playerName}
-              onChange={(e) => setPlayerName(e.target.value)}
-              maxLength={20}
-              placeholder="Enter your name"
-              className="w-full px-4 py-3 rounded bg-gray-700 text-white"
-              autoFocus
-            />
-            <button
-              type="submit"
-              disabled={!playerName.trim() || isJoining}
-              className="w-full mt-4 px-4 py-3 bg-blue-600 text-white rounded font-semibold hover:bg-blue-700 disabled:opacity-50"
-            >
-              {isJoining ? "Joining..." : "Join"}
-            </button>
-          </form>
-
-          {error && <p className="mt-4 text-red-400 text-center">{error}</p>}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-gray-900 p-4">
