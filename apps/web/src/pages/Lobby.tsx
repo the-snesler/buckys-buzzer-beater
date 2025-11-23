@@ -30,6 +30,30 @@ export default function Lobby() {
     }
   }, [location.state]);
 
+  const loadDefaultGame = async () => {
+    setError(null);
+    try {
+      const response = await fetch('/formatted_game.json');
+      const json = await response.json();
+
+      const transformed: Category[] = json.game.single.map((cat: { category: string; clues: { value: number; clue: string; solution: string }[] }) => ({
+        title: cat.category,
+        questions: cat.clues.map((clue) => ({
+          question: clue.clue,
+          answer: clue.solution,
+          value: clue.value,
+          answered: false,
+        })),
+      }));
+
+      setCategories(transformed);
+      setFileName('Default Game');
+      setFromBuilder(false);
+    } catch (err) {
+      setError('Failed to load default game');
+    }
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -148,12 +172,21 @@ export default function Lobby() {
         <div className="border-t border-gray-700 pt-6">
           <div className="flex items-center justify-between mb-2">
             <label className="block text-gray-300">Game File</label>
-            <Link
-              to="/create"
-              className="text-blue-400 hover:text-blue-300 text-sm"
-            >
-              or create your own
-            </Link>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={loadDefaultGame}
+                className="text-blue-400 hover:text-blue-300 text-sm"
+              >
+                Default game
+              </button>
+              <Link
+                to="/create"
+                className="text-blue-400 hover:text-blue-300 text-sm"
+              >
+                or create your own
+              </Link>
+            </div>
           </div>
           <input
             type="file"
