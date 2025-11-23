@@ -190,6 +190,7 @@ async fn ws_socket_handler(
             res = ch.recv().fuse() => match res {
                 Ok(recv) => {
                     let ser = serde_json::to_string(&recv)?;
+                    println!("ser {}", ser);
                     ws.send(Message::Text(Utf8Bytes::from(ser))).await?;
                 },
                 Err(e) => Err(e)?
@@ -234,7 +235,7 @@ async fn ws_socket_handler(
                     let room = room_map
                         .get_mut(&code)
                         .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-                    room.update(&msg, player_id);
+                    room.update(&msg, player_id).await?;
                 }
             }
         }
