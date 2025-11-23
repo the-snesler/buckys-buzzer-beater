@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use tokio_mpmc::{ChannelError, Sender};
 
@@ -21,6 +23,16 @@ pub struct PlayerEntry {
     pub sender: Sender<WsMsg>,
     pub status: ConnectionStatus,
     pub latencies: [u32; 5],
+}
+
+impl fmt::Debug for PlayerEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlayerEntry")
+            .field("player", &self.player)
+            .field("status", &self.status)
+            .field("latencies", &self.latencies)
+            .finish()
+    }
 }
 
 impl PlayerEntry {

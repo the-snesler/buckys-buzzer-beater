@@ -160,13 +160,16 @@ async fn ws_socket_handler(
         let room = room_map
             .get_mut(&code)
             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
+        println!("room: {:?}", room);
 
         match (player_id, token, player_name) {
             (Some(id), Some(t), Some(name)) => {
                 if t == room.host_token {
                     let host = HostEntry::new(id, tx);
                     let players: &Vec<Player> = &room.players.iter().clone().map(|entry| entry.player.clone()).collect();
-                    host.sender.send(WsMsg::PlayerList { list: players.clone() }).await?;
+                    let msg = WsMsg::PlayerList { list: players.clone() };
+                    println!("{:?}", &msg);
+                    host.sender.send(msg).await?;
                     room.host = Some(host);
                 } else {
                     let player = PlayerEntry::new(Player::new(id, name, 0, false), tx);
@@ -177,6 +180,17 @@ async fn ws_socket_handler(
                 // Shouldnt fail conversion I hope
                 let player = PlayerEntry::new(Player::new((room.players.len() + 1).try_into().unwrap(), name, 0, false), tx);
                 room.players.push(player);
+            },
+            (_, Some(t), _) => {
+                println!("fjdsklajfslk");
+                if let Some(host) = &room.host {
+                    if t == room.host_token {
+                        let players: &Vec<Player> = &room.players.iter().clone().map(|entry| entry.player.clone()).collect();
+                        let msg = WsMsg::PlayerList { list: players.clone() };
+                        println!("{:?}", &msg);
+                        host.sender.send(msg).await?;
+                    }
+                }
             }
             _ => {}
         }

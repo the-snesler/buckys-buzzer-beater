@@ -8,6 +8,7 @@ use crate::{
     ws_msg::{WsMsg, WsMsgChannel},
 };
 
+#[derive(Debug)]
 pub struct Room {
     pub code: String,
     pub host_token: String,
@@ -117,7 +118,7 @@ async fn send_all(players: &[PlayerEntry], msg: &WsMsg) {
     });
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 enum GameState {
     Start,
     Selection,
