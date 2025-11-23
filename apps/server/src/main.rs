@@ -39,7 +39,7 @@ impl AppState {
 }
 
 fn generate_room_code() -> String {
-    const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
     let mut rng = rand::rng();
     (0..6)
         .map(|_| {
@@ -62,7 +62,7 @@ fn generate_host_token() -> String {
 
 #[derive(Serialize)]
 struct CreateRoomResponse {
-    code: String,
+    room_code: String,
     host_token: String,
 }
 
@@ -83,7 +83,7 @@ async fn create_room(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Cr
 
     (
         StatusCode::CREATED,
-        Json(CreateRoomResponse { code, host_token }),
+        Json(CreateRoomResponse { room_code: code, host_token }),
     )
 }
 
