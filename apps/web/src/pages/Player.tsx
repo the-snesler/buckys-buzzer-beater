@@ -29,6 +29,18 @@ export default function Player() {
             (payload as any).token
           );
           break;
+        case "GameState":
+          const gameState = payload as { state: String };
+          if (gameState.state === "waitingForBuzz") {
+            setCanBuzz(true);
+            setHasBuzzed(false);
+          } else if (gameState.state === "selection") {
+            setCanBuzz(false);
+            setHasBuzzed(false);
+          } else {
+            setCanBuzz(false);
+          }
+          break;
         case "BuzzEnabled":
           setCanBuzz(true);
           setHasBuzzed(false);
@@ -46,7 +58,7 @@ export default function Player() {
 
   const handleBuzz = () => {
     if (canBuzz && !hasBuzzed) {
-      sendMessage({ Buzz: null });
+      sendMessage({ Buzz: {} });
       setHasBuzzed(true);
     }
   };

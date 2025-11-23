@@ -22,6 +22,7 @@ use tokio_mpmc::channel;
 use crate::{game::Room, host::HostEntry, player::*, ws_msg::WsMsg};
 
 mod game;
+mod game_file;
 mod host;
 mod player;
 mod ws_msg;
@@ -77,7 +78,15 @@ struct CreateRoomResponse {
     host_token: String,
 }
 
-async fn create_room(State(state): State<Arc<AppState>>) -> (StatusCode, Json<CreateRoomResponse>) {
+#[derive(Deserialize)]
+struct CreateRoomRequest {
+    categories: Option<Vec<game::Category>>,
+}
+
+async fn create_room(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateRoomRequest>,
+) -> (StatusCode, Json<CreateRoomResponse>) {
     let mut room_map = state.room_map.lock().await;
 
     // Generate a unique room code
@@ -89,7 +98,12 @@ async fn create_room(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Cr
     };
 
     let host_token = generate_host_token();
-    let room = Room::new(code.clone(), host_token.clone());
+    let mut room = Room::new(code.clone(), host_token.clone());
+
+    if let Some(categories) = body.categories {
+        room.categories = categories;
+    }
+
     room_map.insert(code.clone(), room);
 
     (
@@ -192,7 +206,11 @@ async fn ws_socket_handler(
                 // Update existing player's send channel
                 existing.sender = tx;
             } else {
-                return Err(anyhow!("Player with ID {} could not be found in room {}", id, code));
+                return Err(anyhow!(
+                    "Player with ID {} could not be found in room {}",
+                    id,
+                    code
+                ));
             }
             if let Some(host) = &room.host {
                 send_player_list_to_host(host, &room.players).await?;
@@ -200,10 +218,16 @@ async fn ws_socket_handler(
         } else if let Some(name) = player_name {
             let new_id: u32 = (room.players.len() + 1).try_into().unwrap();
             let player_token = generate_player_token();
-            let player = PlayerEntry::new(Player::new(new_id, name, 0, false, player_token.clone()), tx.clone());
+            let player = PlayerEntry::new(
+                Player::new(new_id, name, 0, false, player_token.clone()),
+                tx.clone(),
+            );
             room.players.push(player);
 
-            let new_player_msg = WsMsg::NewPlayer { pid: new_id, token: player_token };
+            let new_player_msg = WsMsg::NewPlayer {
+                pid: new_id,
+                token: player_token,
+            };
             tx.send(new_player_msg).await?;
 
             if let Some(host) = &room.host {
@@ -217,7 +241,9 @@ async fn ws_socket_handler(
             }
         } else {
             // Invalid connection
-            return Err(anyhow!("Invalid connection: must provide player_name (new player) or token (reconnect)"));
+            return Err(anyhow!(
+                "Invalid connection: must provide player_name (new player) or token (reconnect)"
+            ));
         }
 
         for player in &room.players {
@@ -229,7 +255,12 @@ async fn ws_socket_handler(
             res = ch.recv().fuse() => match res {
                 Ok(recv) => {
                     let ser = serde_json::to_string(&recv)?;
-                    println!("ser {}", ser);
+                    if let Some(r) = &recv {
+                        match &r {
+                            WsMsg::GameState { state, .. } => println!("sending GameState: {:?}", state),
+                            other => println!("sending {:?}", other),
+                        }
+                    }
                     ws.send(Message::Text(Utf8Bytes::from(ser))).await?;
                 },
                 Err(e) => Err(e)?
@@ -250,11 +281,11 @@ async fn ws_socket_handler(
                     // deser
                     let msg: WsMsg = serde_json::from_str(&msg)?;
                     // witness case, just for now
-                    if let m @ (WsMsg::StartGame
-                        | WsMsg::EndGame
-                        | WsMsg::BuzzEnable
-                        | WsMsg::BuzzDisable
-                        | WsMsg::Buzz) = msg.clone() {
+                    if let m @ (WsMsg::StartGame {}
+                        | WsMsg::EndGame {}
+                        | WsMsg::BuzzEnable {}
+                        | WsMsg::BuzzDisable {}
+                        | WsMsg::Buzz {}) = msg.clone() {
                         let witness = WsMsg::Witness { msg: Box::new(m) };
                         let mut room_map = state.room_map.lock().await;
                         let room = room_map
