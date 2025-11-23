@@ -5,12 +5,14 @@ import { createRoom } from '../lib/api';
 export default function Lobby() {
   const navigate = useNavigate();
   const [roomCode, setRoomCode] = useState('');
+  const [playerName, setPlayerName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (roomCode.length === 6) {
+    if (roomCode.length === 6 && playerName.trim()) {
+      sessionStorage.setItem(`player_name`, playerName);
       navigate(`/play/${roomCode.toUpperCase()}`);
     }
   };
@@ -31,25 +33,39 @@ export default function Lobby() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-900">
-      <div className="bg-gray-800 p-8 rounded-lg shadow-xl max-w-md w-full">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-900">
+      <div className="bg-gray-800 p-8 rounded-lg shadow-xl w-lg">
         <h1 className="text-3xl font-bold text-white text-center mb-8">
           Bucky's Buzzer Banger
         </h1>
 
         <form onSubmit={handleJoin} className="mb-6">
-          <label className="block text-gray-300 mb-2">Room Code</label>
-          <input
-            type="text"
-            value={roomCode}
-            onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-            maxLength={6}
-            placeholder="67ABCD"
-            className="w-full px-4 py-3 rounded bg-gray-700 text-white text-center text-2xl tracking-widest uppercase"
-          />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-gray-300 mb-2">Code</label>
+              <input
+                type="text"
+                value={roomCode}
+                onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                maxLength={6}
+                placeholder="67ABCD"
+                className="w-full px-4 py-3 rounded bg-gray-700 text-white text-center text-2xl tracking-widest uppercase mb-4"
+              />
+            </div>
+            <div>
+              <label className="block text-gray-300 mb-2">Name</label>
+              <input
+                type="text"
+                value={playerName}
+                onChange={(e) => setPlayerName(e.target.value)}
+                placeholder="Your Name"
+                className="w-full px-4 py-3 rounded bg-gray-700 text-white text-center text-2xl"
+              />
+            </div>
+          </div>
           <button
             type="submit"
-            disabled={roomCode.length !== 6}
+            disabled={roomCode.length !== 6 || !playerName.trim()}
             className="w-full mt-4 px-4 py-3 bg-blue-600 text-white rounded font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Join Game

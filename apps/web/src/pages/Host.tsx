@@ -1,6 +1,5 @@
-import { useParams } from 'react-router-dom';
-import { useEffect } from "react";
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useParams } from "react-router-dom";
+import { useWebSocket } from "../hooks/useWebSocket";
 
 export default function Host() {
   const { code } = useParams<{ code: string }>();
@@ -9,22 +8,20 @@ export default function Host() {
   const { isConnected, sendMessage } = useWebSocket({
     roomCode: code!,
     token: hostToken!,
-    onMessage: (message) => {},
+    autoConnect: true,
+    onMessage: (message) => {
+      console.log("Received message:", message);
+    },
   });
-
-  // Broadcast state changes to players
-  useEffect(() => {
-    if (isConnected) {
-      // TODO: Send SYNC_STATE to all players when state changes
-    }
-  }, [isConnected, sendMessage]);
 
   if (!hostToken) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900">
         <div className="text-white text-center">
           <h1 className="text-2xl font-bold mb-4">Invalid Host Session</h1>
-          <p className="text-gray-400">Please create a new room from the lobby.</p>
+          <p className="text-gray-400">
+            Please create a new room from the lobby.
+          </p>
         </div>
       </div>
     );
