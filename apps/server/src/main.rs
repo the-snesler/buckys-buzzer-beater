@@ -102,7 +102,6 @@ struct RoomParams {
 
 #[derive(Deserialize)]
 struct WsQuery {
-    token: Option<String>,
     #[serde(rename = "playerName")]
     player_name: Option<String>,    // only players include player_name
     token: Option<String>,          // only rejoining players include both token & player_id
