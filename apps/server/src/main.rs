@@ -207,8 +207,21 @@ async fn ws_socket_handler(
         let is_host = token.as_ref() == Some(&room.host_token);
 
         if is_host {
-            let host = HostEntry::new(player_id.unwrap_or(0), tx);
+            let host = HostEntry::new(player_id.unwrap_or(0), tx.clone());
             send_player_list_to_host(&host, &room.players).await?;
+
+            if room.state != GameState::Start {
+                let players: Vec<Player> = room.players.iter().map(|e| e.player.clone()).collect();
+                let game_state_msg = WsMsg::GameState {
+                    state: room.state.clone(),
+                    categories: room.categories.clone(),
+                    players,
+                    current_question: room.current_question,
+                    current_buzzer: room.current_buzzer,
+                };
+                tx.send(game_state_msg).await?;
+            }
+
             room.host = Some(host);
         } else if let (Some(id), Some(_tok)) = (player_id, &token) {
             if let Some(existing) = room.players.iter_mut().find(|p| p.player.pid == id) {
