@@ -102,11 +102,11 @@ struct RoomParams {
 
 #[derive(Deserialize)]
 struct WsQuery {
-    token: String,
+    token: Option<String>,
     #[serde(rename = "playerName")]
-    player_name: String,
+    player_name: Option<String>,
     #[serde(rename = "playerID")]
-    player_id: u32,
+    player_id: Option<u32>,
 }
 
 async fn ws_upgrade_handler(
@@ -151,7 +151,7 @@ async fn ws_socket_handler(
     }: WsQuery,
 ) -> anyhow::Result<()> {
     // for debugging
-    println!("{} {} {} {}", code, token, player_name, player_id);
+    println!("{:?} {:?} {:?} {:?}", code, token, player_name, player_id);
     let ch: tokio_mpmc::Receiver<WsMsg>;
     let tx: tokio_mpmc::Sender<WsMsg>;
     (tx, ch) = channel(20);
@@ -161,13 +161,23 @@ async fn ws_socket_handler(
             .get_mut(&code)
             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
 
-        if token == room.host_token {
-            let host = HostEntry::new(player_id, tx);
-            room.host = Some(host);
-        } else {
-            let player = PlayerEntry::new(Player::new(player_id, player_name, 0, false), tx);
-            room.players.push(player);
+        match (player_id, token, player_name) {
+            (Some(id), Some(t), Some(name)) => {
+                if t == room.host_token {
+                    let host = HostEntry::new(id, tx);
+                    room.host = Some(host);
+                } else {
+                    let player = PlayerEntry::new(Player::new(id, name, 0, false), tx);
+                    room.players.push(player);
+                }
+            },
+            (_, _, Some(name)) => {
+                let player = PlayerEntry::new(Player::new((room.players.len() + 1).try_into().unwrap(), name, 0, false), tx);
+                room.players.push(player);
+            }
+            _ => {}
         }
+
         for player in &room.players {
             println!("player: {}", player.player.pid);
         }
@@ -208,8 +218,10 @@ async fn ws_socket_handler(
                             .get_mut(&code)
                             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
                         for player in &room.players {
-                            if player.player.pid == player_id {
-                                continue;
+                            if let Some(id) = player_id {
+                                if player.player.pid == id {
+                                    continue;
+                                }
                             }
                             let s = &player.sender;
                             s.send(witness.clone()).await?;

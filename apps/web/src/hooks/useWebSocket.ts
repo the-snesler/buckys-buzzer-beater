@@ -44,8 +44,10 @@ export function useWebSocket({
     if (token) params.token = token;
     if (playerName) params.name = playerName;
     if (playerId) params.playerId = playerId;
+    console.log(token, playerName, playerId);
 
     const url = getWebSocketUrl(roomCode, params);
+    console.log(url);
     const ws = new WebSocket(url);
 
     ws.onopen = () => {

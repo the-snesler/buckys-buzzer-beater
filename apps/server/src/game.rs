@@ -52,7 +52,7 @@ impl Room {
         self.players.push(PlayerEntry::new(player, sender));
     }
 
-    pub fn update(&mut self, msg: &WsMsg, pid: PlayerId) {
+    pub fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) {
         match msg {
             WsMsg::PlayerList { .. } => {
                 self.update(msg, pid);
@@ -119,7 +119,7 @@ enum GameState {
     Start,
     Selection,
     QuestionReading,
-    Answer(PlayerId),
+    Answer(Option<PlayerId>),
     AwaitingBuzz,
     GameEnd,
 }
