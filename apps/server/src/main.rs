@@ -1,4 +1,9 @@
-use std::{collections::HashMap, sync::Arc, thread, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    thread,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::anyhow;
 use axum::{
@@ -33,6 +38,8 @@ mod game_file;
 mod host;
 mod player;
 mod ws_msg;
+
+const ROOM_TTL_MINUTES: u64 = 30;
 
 struct AppState {
     room_map: Mutex<HashMap<String, Room>>,
@@ -218,6 +225,7 @@ async fn ws_socket_handler(
                     players,
                     current_question: room.current_question,
                     current_buzzer: room.current_buzzer,
+                    winner: room.winner,
                 };
                 tx.send(game_state_msg).await?;
             }
@@ -289,6 +297,8 @@ async fn ws_socket_handler(
             ));
         }
 
+        room.touch();
+
         for player in &room.players {
             println!("player: {}", player.player.pid);
         }
@@ -330,24 +340,29 @@ async fn ws_socket_handler(
                         | WsMsg::BuzzDisable {}
                         | WsMsg::Buzz {}) = msg.clone() {
                         let witness = WsMsg::Witness { msg: Box::new(m) };
-                        let mut room_map = state.room_map.lock().await;
-                        let room = room_map
-                            .get_mut(&code)
-                            .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-                        for player in &room.players {
-                            let cpid = player.player.pid.clone();
-                            let csender = player.sender.clone();
-                            let lat: u64 = player.latency().into();
+
+                        let player_info: Vec<(u32, tokio_mpmc::Sender<WsMsg>, u64)> = {
+                            let room_map = state.room_map.lock().await;
+                            let room = room_map
+                                .get(&code)
+                                .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
+                            room.players
+                                .iter()
+                                .map(|p| (p.player.pid, p.sender.clone(), p.latency().into()))
+                                .collect()
+                        };
+                        let sender_player_id = connection_player_id;
+                        for (cpid, csender, lat) in player_info {
                             let witnessc = witness.clone();
                             let latc = lat.clone();
                             tokio::spawn(async move {
-                                if let Some(id) = connection_player_id {
+                                if let Some(id) = sender_player_id {
                                     if cpid == id {
                                         return Ok(());
                                     }
                                 }
                                 let s = csender;
-                                tokio::time::sleep(Duration::from_millis(500 - latc)).await;
+                                tokio::time::sleep(Duration::from_millis(500_u64 .saturating_sub(latc))).await;
                                 s.send(witnessc).await
                             });
                         }
@@ -411,12 +426,44 @@ async fn cpr_handler(
     }
 }
 
+async fn cleanup_inactive_rooms(state: &Arc<AppState>) {
+    let mut room_map = state.room_map.lock().await;
+    let threshold = SystemTime::now()
+        .checked_sub(Duration::from_secs(ROOM_TTL_MINUTES * 60))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    let rooms_to_remove: Vec<String> = room_map
+        .iter()
+        .filter(|(_, room)| room.last_activity < threshold)
+        .map(|(code, _)| code.clone())
+        .collect();
+
+    for code in &rooms_to_remove {
+        room_map.remove(code);
+        println!("Cleaned up inactive room: {}", code);
+    }
+
+    if !rooms_to_remove.is_empty() {
+        println!("Cleaned up {} inactive rooms", rooms_to_remove.len());
+    }
+}
+
 const HOST: &str = "0.0.0.0";
 const PORT: u16 = 3000;
 
 #[tokio::main]
 async fn main() {
     let state = Arc::new(AppState::new());
+
+    let cleanup_state = state.clone();
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            cleanup_inactive_rooms(&cleanup_state).await;
+        }
+    });
 
     let room_routes = Router::new()
         .route("/create", post(create_room))
