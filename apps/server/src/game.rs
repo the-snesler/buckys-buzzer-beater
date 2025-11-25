@@ -112,55 +112,36 @@ impl Room {
 }
 
 impl Room {
-    pub async fn broadcast_state(&self) -> anyhow::Result<()> {
+    fn build_game_state_msg(&self) -> WsMsg {
         let players: Vec<Player> = self.players.iter().map(|e| e.player.clone()).collect();
 
-        let msg = WsMsg::GameState {
+        WsMsg::GameState {
             state: self.state.clone(),
             categories: self.categories.clone(),
-            players: players.clone(),
-            current_buzzer: self.current_buzzer,
+            players,
             current_question: self.current_question,
-        };
-
-        if let Some(host) = &self.host {
-            host.sender.send(msg.clone()).await?;
+            current_buzzer: self.current_buzzer,
         }
-
-        for player_entry in &self.players {
-            let _ = player_entry.sender.send(msg.clone()).await;
-        }
-
-        Ok(())
     }
 
-    pub async fn broadcast_player_states(&self) -> anyhow::Result<()> {
-        let can_buzz_state = self.state == GameState::WaitingForBuzz;
+    fn build_player_state_msg(&self, player_id: PlayerId) -> Option<WsMsg> {
+        let player = self.players.iter().find(|p| p.player.pid == player_id)?;
+        let can_buzz = self.state == GameState::WaitingForBuzz && !player.player.buzzed;
 
-        for player_entry in &self.players {
-            let player_state_msg = WsMsg::PlayerState {
-                pid: player_entry.player.pid,
-                buzzed: player_entry.player.buzzed,
-                score: player_entry.player.score,
-                can_buzz: can_buzz_state && !player_entry.player.buzzed,
-            };
-            let _ = player_entry.sender.send(player_state_msg).await;
-        }
-        Ok(())
+        Some(WsMsg::PlayerState {
+            pid: player.player.pid,
+            buzzed: player.player.buzzed,
+            score: player.player.score,
+            can_buzz,
+        })
     }
 
-    pub async fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) -> anyhow::Result<()> {
-        let own_entry: Option<&mut PlayerEntry> = if let Some(pid) = pid {
-            let idx = self.players.iter().position(|p| p.player.pid == pid);
-            idx.map(|i| &mut self.players[i])
-        } else {
-            None
-        };
+    pub fn handle_message(&mut self, msg: &WsMsg, sender_id: Option<PlayerId>) -> RoomResponse {
         match msg {
             WsMsg::StartGame {} => {
                 self.state = GameState::Selection;
-                self.broadcast_state().await?;
-                self.broadcast_player_states().await?;
+                RoomResponse::broadcast_state(self.build_game_state_msg())
+                    .merge(self.build_all_player_states())
             }
 
             WsMsg::HostChoice {
@@ -169,24 +150,17 @@ impl Room {
             } => {
                 self.current_question = Some((*category_index, *question_index));
                 self.current_buzzer = None;
-                // Reset all player buzz states
                 for player in &mut self.players {
                     player.player.buzzed = false;
                 }
                 self.state = GameState::QuestionReading;
-                self.broadcast_state().await?;
-                self.broadcast_player_states().await?;
-            }
-
-            WsMsg::HostReady {} => {
-                self.state = GameState::WaitingForBuzz;
-                self.broadcast_state().await?;
-                self.broadcast_player_states().await?;
+                RoomResponse::broadcast_state(self.build_game_state_msg())
+                    .merge(self.build_all_player_states())
             }
 
             WsMsg::Buzz {} => {
                 if self.state == GameState::WaitingForBuzz
-                    && let Some(player_id) = pid
+                    && let Some(player_id) = sender_id
                     && let Some(player_entry) =
                         self.players.iter_mut().find(|p| p.player.pid == player_id)
                     && !player_entry.player.buzzed
@@ -195,113 +169,144 @@ impl Room {
                     self.current_buzzer = Some(player_id);
                     self.state = GameState::Answer;
 
-                    if let Some(host) = &self.host {
-                        let buzzed_msg = WsMsg::Buzzed {
-                            pid: player_id,
-                            name: player_entry.player.name.clone(),
-                        };
-                        host.sender.send(buzzed_msg).await?;
-                    }
+                    let buzzed_msg = WsMsg::Buzzed {
+                        pid: player_id,
+                        name: player_entry.player.name.clone(),
+                    };
 
-                    self.broadcast_state().await?;
-                    self.broadcast_player_states().await?;
+                    return RoomResponse::to_host(buzzed_msg)
+                        .merge(RoomResponse::broadcast_state(self.build_game_state_msg()))
+                        .merge(self.build_all_player_states());
                 }
+                RoomResponse::new()
             }
 
-            WsMsg::HostChecked { correct } => {
-                if let Some((cat_idx, q_idx)) = self.current_question {
-                    if *correct {
-                        if let Some(category) = self.categories.get_mut(cat_idx)
-                            && let Some(question) = category.questions.get_mut(q_idx)
-                        {
-                            question.answered = true;
+            WsMsg::HostReady {} => {
+                self.state = GameState::WaitingForBuzz;
+                RoomResponse::broadcast_state(self.build_game_state_msg())
+                    .merge(self.build_all_player_states())
+            }
 
-                            if let Some(buzzer_id) = self.current_buzzer
-                                && let Some(player) =
-                                    self.players.iter_mut().find(|p| p.player.pid == buzzer_id)
-                            {
-                                let incr: i32 = question.value.try_into()?;
-                                player.player.score += incr;
-                            }
-                        }
-                        self.current_question = None;
-                        self.current_buzzer = None;
+            WsMsg::HostChecked { correct } => self.handle_host_checked(*correct),
 
-                        if self.has_remaining_questions() {
-                            self.state = GameState::Selection;
-                        } else {
-                            self.state = GameState::GameEnd;
-                        }
-                    } else {
-                        if let Some(category) = self.categories.get(cat_idx)
-                            && let Some(question) = category.questions.get(q_idx)
-                            && let Some(buzzer_id) = self.current_buzzer
-                            && let Some(player) =
-                                self.players.iter_mut().find(|p| p.player.pid == buzzer_id)
-                        {
-                            let decr: i32 = question.value.try_into()?;
-                            player.player.score -= decr;
-                        }
-                        let any_can_buzz = self.players.iter().any(|p| !p.player.buzzed);
-                        if any_can_buzz {
-                            self.current_buzzer = None;
-                            self.state = GameState::WaitingForBuzz;
-                        } else {
-                            if let Some(category) = self.categories.get_mut(cat_idx)
-                                && let Some(question) = category.questions.get_mut(q_idx)
-                            {
-                                question.answered = true;
-                            }
-                            self.current_question = None;
-                            self.current_buzzer = None;
-
-                            if self.has_remaining_questions() {
-                                self.state = GameState::Selection;
-                            } else {
-                                self.state = GameState::GameEnd;
-                            }
-                        }
+            WsMsg::Heartbeat { hbid, t_dohb_recv } => {
+                if let Some(sender_id) = sender_id {
+                    if let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
+                    {
+                        entry.on_know_dohb_recv(*hbid, *t_dohb_recv);
                     }
                 }
-                self.broadcast_state().await?;
-                self.broadcast_player_states().await?;
+                RoomResponse::new()
+            }
+
+            WsMsg::LatencyOfHeartbeat { hbid, t_lat } => {
+                if let Some(sender_id) = sender_id {
+                    if let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
+                    {
+                        let t_lat_u32 = (*t_lat).try_into().unwrap_or(u32::MAX);
+                        entry.on_latencyhb(*hbid, t_lat_u32);
+                    }
+                }
+                RoomResponse::new()
             }
 
             WsMsg::EndGame {} => {
                 self.state = GameState::GameEnd;
-                self.broadcast_state().await?;
-                self.broadcast_player_states().await?;
+                RoomResponse::broadcast_state(self.build_game_state_msg())
+                    .merge(self.build_all_player_states())
             }
-            WsMsg::Heartbeat { hbid, t_dohb_recv } => {
-                if let Some(entry) = own_entry {
-                    if entry.on_know_dohb_recv(*hbid, *t_dohb_recv) {
-                        println!("successfully updated dohb_recv");
-                    } else {
-                        println!("WARN: failed to update DoHeartbeat recv time");
-                    }
+
+            _ => RoomResponse::new(),
+        }
+    }
+
+    fn build_all_player_states(&self) -> RoomResponse {
+        let mut response = RoomResponse::new();
+        for player in &self.players {
+            if let Some(msg) = self.build_player_state_msg(player.player.pid) {
+                response.messages_to_specific.push((player.player.pid, msg));
+            }
+        }
+        response
+    }
+
+    fn handle_host_checked(&mut self, correct: bool) -> RoomResponse {
+        let Some((cat_idx, q_idx)) = self.current_question else {
+            return RoomResponse::new();
+        };
+
+        let question = self
+            .categories
+            .get_mut(cat_idx)
+            .and_then(|cat| cat.questions.get_mut(q_idx));
+
+        let question_value = question.as_ref().map(|q| q.value as i32);
+        let Some(question) = question else {
+            return RoomResponse::new();
+        };
+
+        let Some(question_value) = question_value else {
+            return RoomResponse::new();
+        };
+
+        if let Some(buzzer_id) = self.current_buzzer {
+            if let Some(player) = self.players.iter_mut().find(|p| p.player.pid == buzzer_id) {
+                if correct {
+                    player.player.score += question_value;
                 } else {
-                    println!("WARN: own entry missing handling Heartbeat, continuing anyway");
+                    player.player.score -= question_value;
                 }
             }
-            WsMsg::LatencyOfHeartbeat { hbid, t_lat } => {
-                if let Some(entry) = own_entry {
-                    if !entry.on_latencyhb(
-                        *hbid,
-                        (*t_lat).try_into().expect(
-                            "LatencyOfHeartbeat latency of heartbeat exceeds 32-bit integer limit",
-                        ),
-                    ) {
-                        println!(
-                            "WARN: handling LatencyOfHeartbeat failed to update latencies, continuing anyway"
-                        );
-                    }
-                } else {
-                    println!(
-                        "WARN: own entry missing while handling LatencyOfHeartbeat, continuing anyway"
-                    );
-                }
+        }
+
+        let any_can_buzz = self.players.iter().any(|p| !p.player.buzzed);
+
+        if correct {
+            question.answered = true;
+            self.current_question = None;
+            self.current_buzzer = None;
+            self.state = if self.has_remaining_questions() {
+                GameState::Selection
+            } else {
+                GameState::GameEnd
+            };
+        } else if any_can_buzz {
+            self.current_buzzer = None;
+            self.state = GameState::WaitingForBuzz;
+        } else {
+            question.answered = true;
+            self.current_question = None;
+            self.current_buzzer = None;
+            self.state = if self.has_remaining_questions() {
+                GameState::Selection
+            } else {
+                GameState::GameEnd
+            };
+        }
+
+        RoomResponse::broadcast_state(self.build_game_state_msg())
+            .merge(self.build_all_player_states())
+    }
+
+    pub async fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) -> anyhow::Result<()> {
+        let response = self.handle_message(msg, pid);
+
+        for msg in response.messages_to_host {
+            if let Some(host) = &self.host {
+                let _ = host.sender.send(msg).await;
             }
-            _ => {}
+        }
+
+        for msg in response.messages_to_players {
+            for player in &self.players {
+                let _ = player.sender.send(msg.clone()).await;
+            }
+        }
+
+        for (player_id, msg) in response.messages_to_specific {
+            if let Some(player) = self.players.iter().find(|p| p.player.pid == player_id) {
+                let _ = player.sender.send(msg).await;
+            }
         }
 
         Ok(())
