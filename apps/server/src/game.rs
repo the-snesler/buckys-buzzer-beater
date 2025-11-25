@@ -49,6 +49,53 @@ impl fmt::Debug for Room {
     }
 }
 
+pub struct RoomResponse {
+    pub messages_to_host: Vec<WsMsg>,
+    pub messages_to_players: Vec<WsMsg>,
+    pub messages_to_specific: Vec<(PlayerId, WsMsg)>,
+}
+
+impl RoomResponse {
+    pub fn new() -> Self {
+        Self {
+            messages_to_host: vec![],
+            messages_to_players: vec![],
+            messages_to_specific: vec![],
+        }
+    }
+
+    pub fn broadcast_state(state_msg: WsMsg) -> Self {
+        Self {
+            messages_to_host: vec![state_msg.clone()],
+            messages_to_players: vec![state_msg],
+            messages_to_specific: vec![],
+        }
+    }
+
+    pub fn to_host(msg: WsMsg) -> Self {
+        Self {
+            messages_to_host: vec![msg],
+            messages_to_players: vec![],
+            messages_to_specific: vec![],
+        }
+    }
+
+    pub fn to_player(player_id: PlayerId, msg: WsMsg) -> Self {
+        Self {
+            messages_to_host: vec![],
+            messages_to_players: vec![],
+            messages_to_specific: vec![(player_id, msg)],
+        }
+    }
+
+    pub fn merge(mut self, other: RoomResponse) -> Self {
+        self.messages_to_host.extend(other.messages_to_host);
+        self.messages_to_players.extend(other.messages_to_players);
+        self.messages_to_specific.extend(other.messages_to_specific);
+        self
+    }
+}
+
 impl Room {
     pub fn new(code: String, host_token: String) -> Self {
         Self {
