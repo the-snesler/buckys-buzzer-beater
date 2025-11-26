@@ -330,3 +330,159 @@ pub enum GameState {
     WaitingForBuzz,
     GameEnd,
 }
+
+impl Default for GameState {
+    fn default() -> Self {
+        Self::Start
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_room() -> Room {
+        let mut room = Room::new("TEST".to_string(), "token".to_string());
+
+        room.categories = vec![
+            Category {
+                title: "Test Category".to_string(),
+                questions: vec![
+                    Question {
+                        question: "What is 2+2?".to_string(),
+                        answer: "4".to_string(),
+                        value: 200,
+                        answered: false,
+                    },
+                    Question {
+                        question: "What is 6?".to_string(),
+                        answer: "6".to_string(),
+                        value: 400,
+                        answered: false,
+                    },
+                ]
+            }
+        ];
+
+        room
+    }
+
+    fn add_test_player(room: &mut Room, pid: u32, name: &str) {
+        use tokio_mpmc::channel;
+        let (tx, _rx) = channel(10);
+
+        let player = PlayerEntry::new(
+            Player::new(pid, name.to_string(), 0, false, "token".to_string()),
+            tx,
+        );
+        room.players.push(player);
+    }
+
+    #[test]
+    fn test_game_state_transitions() {
+        struct TestCase {
+            name: &'static str,
+            initial_state: GameState,
+            setup: fn(&mut Room),
+            message: WsMsg,
+            sender_id: Option<PlayerId>,
+            expected_state: GameState,
+            assertions: fn(&Room),
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "StartGame transitions to Selection",
+                initial_state: GameState::Start,
+                setup: |_| {},
+                message: WsMsg::StartGame {},
+                sender_id: None,
+                expected_state: GameState::Selection,
+                assertions: |_| {},
+            },
+            TestCase {
+                name: "HostChoice transitions to QuestionReading",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                message: WsMsg::HostChoice {
+                    category_index: 0,
+                    question_index: 0,
+                },
+                sender_id: None,
+                expected_state: GameState::QuestionReading,
+                assertions: |room| {
+                    assert_eq!(room.current_question, Some((0, 0)));
+                    assert_eq!(room.current_buzzer, None);
+                },
+            },
+            TestCase {
+                name: "HostChoice resets player buzz states",
+                initial_state: GameState::Selection,
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    add_test_player(room, 1, "Sam");
+                    room.players[0].player.buzzed = true;
+                    room.players[1].player.buzzed = true;
+                },
+                message: WsMsg::HostChoice {
+                    category_index: 0,
+                    question_index: 0,
+                },
+                sender_id: None,
+                expected_state: GameState::QuestionReading,
+                assertions: |room| {
+                    assert!(!room.players[0].player.buzzed);
+                    assert!(!room.players[1].player.buzzed);
+                },
+            },
+            TestCase {
+                name: "HostReady transitions to WaitingForBuzz",
+                initial_state: GameState::QuestionReading,
+                setup: |_| {},
+                message: WsMsg::HostReady {},
+                sender_id: None,
+                expected_state: GameState::WaitingForBuzz,
+                assertions: |_| {},
+            },
+            TestCase {
+                name: "Player buzz transitions to Answer",
+                initial_state: GameState::WaitingForBuzz,
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                },
+                message: WsMsg::Buzz {},
+                sender_id: Some(1),
+                expected_state: GameState::Answer,
+                assertions: |room| {
+                    assert_eq!(room.current_buzzer, Some(1));
+                    assert!(room.players[0].player.buzzed);
+                },
+            },
+            TestCase {
+                name: "Player cannot buzz twice",
+                initial_state: GameState::WaitingForBuzz,
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    room.players[0].player.buzzed = true;
+                },
+                message: WsMsg::Buzz {},
+                sender_id: Some(1),
+                expected_state: GameState::WaitingForBuzz,
+                assertions: |room| {
+                    assert_eq!(room.current_buzzer, None);
+                },
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = create_test_room();
+            room.state = tc.initial_state;
+            (tc.setup)(&mut room);
+
+            room.handle_message(&tc.message, tc.sender_id);
+
+            assert_eq!(room.state, tc.expected_state, "Test case failed: {}", tc.name);
+            (tc.assertions)(&room)
+        }
+    }
+}
