@@ -79,25 +79,9 @@ async fn test_player_joins_room() {
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial_msgs = recv_msgs(&mut host_ws).await;
 
-    let mut player_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
-
-    let player_msgs = recv_msgs(&mut player_ws).await;
-
-    let new_player_msg = player_msgs
-        .iter()
-        .find(|m| matches!(m, WsMsg::NewPlayer { .. }));
-    assert!(
-        new_player_msg.is_some(),
-        "Player should receive NewPlayer message"
-    );
-
-    if let Some(WsMsg::NewPlayer { pid, token, .. }) = new_player_msg {
-        assert!(pid > &0, "Player should have valid ID");
-        assert!(!token.is_empty(), "Player should have token");
-    }
+    let (_player_ws, player_id) = add_player(port, &room_code, "AJ").await;
 
     let host_msgs = recv_msgs(&mut host_ws).await;
-
     let player_list_msg = host_msgs
         .iter()
         .find(|m| matches!(m, WsMsg::PlayerList { .. }));
@@ -105,6 +89,9 @@ async fn test_player_joins_room() {
     if let Some(WsMsg::PlayerList(players)) = player_list_msg {
         assert_eq!(players.len(), 1, "Should have 1 player");
         assert_eq!(players[0].name, "AJ");
+        assert_eq!(players[0].pid, player_id);
+    } else {
+        panic!("Host should receive PlayerList");
     }
 
     let room_map = state.room_map.lock().await;
@@ -124,16 +111,13 @@ async fn test_multiple_players_join() {
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
 
-    let mut alice_ws = connect_ws_client(port, &room_code, "?playerName=Alice").await;
-    let _alice_msgs = recv_msgs(&mut alice_ws).await;
+    let (_alice_ws, _alice_id) = add_player(port, &room_code, "Alice").await;
     let _host_update1 = recv_msgs(&mut host_ws).await;
 
-    let mut bob_ws = connect_ws_client(port, &room_code, "?playerName=Bob").await;
-    let _bob_msgs = recv_msgs(&mut bob_ws).await;
+    let (_bob_ws, _bob_id) = add_player(port, &room_code, "Bob").await;
     let _host_update2 = recv_msgs(&mut host_ws).await;
 
-    let mut charlie_ws = connect_ws_client(port, &room_code, "?playerName=Charlie").await;
-    let _charlie_msgs = recv_msgs(&mut charlie_ws).await;
+    let (_charlie_ws, _charlie_id) = add_player(port, &room_code, "Charlie").await;
     let host_final = recv_msgs(&mut host_ws).await;
 
     let player_list = host_final
@@ -166,38 +150,16 @@ async fn test_game_flow_start_to_buzz() {
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
 
-    let mut player_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
-    let player_init = recv_msgs(&mut player_ws).await;
-    let _host_update = recv_msgs(&mut host_ws).await;
+    let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+    let _ = recv_msgs(&mut host_ws).await; // Consume host update
 
-    let player_id = if let Some(WsMsg::NewPlayer { pid, .. }) = player_init
-        .iter()
-        .find(|m| matches!(m, WsMsg::NewPlayer { .. }))
-    {
-        *pid
-    } else {
-        panic!("Player should receive NewPlayer message");
-    };
+    start_game(&mut host_ws, &mut [&mut player_ws]).await;
 
     let start_msgs = send_msg_and_recv_all(&mut host_ws, &WsMsg::StartGame {}).await;
     println!("After StartGame, host got: {:?}", start_msgs);
 
-    let game_state = start_msgs
-        .iter()
-        .find(|m| matches!(m, WsMsg::GameState { .. }));
-    assert!(
-        game_state.is_some(),
-        "Host should receive GameState after start"
-    );
-
-    let player_msgs = recv_msgs(&mut player_ws).await;
-    println!("Player got: {:?}", player_msgs);
-
-    let ready_msgs = send_msg_and_recv_all(&mut host_ws, &WsMsg::HostReady {}).await;
-    println!("After HostReady, host got: {:?}", ready_msgs);
-
+    send_msg_and_recv_all(&mut host_ws, &WsMsg::HostReady {}).await;
     let player_update = recv_msgs(&mut player_ws).await;
-    println!("Player got after HostReady: {:?}", player_update);
 
     let buzz_state = player_update.iter().find(|m| {
         if let WsMsg::GameState { state, .. } = m {
@@ -211,11 +173,8 @@ async fn test_game_flow_start_to_buzz() {
         "Player should get WaitingForBuzz state"
     );
 
-    let buzz_msgs = send_msg_and_recv_all(&mut player_ws, &WsMsg::Buzz {}).await;
-    println!("After Buzz, player got: {:?}", buzz_msgs);
-
+    send_msg_and_recv_all(&mut player_ws, &WsMsg::Buzz {}).await;
     let host_buzz = recv_msgs(&mut host_ws).await;
-    println!("Host got after buzz: {:?}", host_buzz);
 
     let buzz_notification = host_buzz.iter().find(|m| matches!(m, WsMsg::Buzzed { .. }));
     assert!(
@@ -243,16 +202,17 @@ async fn test_player_reconnect() {
     };
     let mut _host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
 
-    let mut player_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
-    let player_msgs = recv_msgs(&mut player_ws).await;
-
-    let (player_id, player_token) = if let Some(WsMsg::NewPlayer { pid, token, .. }) = player_msgs
-        .iter()
-        .find(|m| matches!(m, WsMsg::NewPlayer { .. }))
-    {
-        (*pid, token.clone())
-    } else {
-        panic!("Should get NewPlayer message");
+    let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+    let player_token = {
+        let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).unwrap();
+        room.players
+            .iter()
+            .find(|p| p.player.pid == player_id)
+            .unwrap()
+            .player
+            .token
+            .clone()
     };
 
     {
@@ -278,6 +238,7 @@ async fn test_player_reconnect() {
         );
     }
 
+    // Reconnect
     let mut player_reconnect = connect_ws_client(
         port,
         &room_code,
@@ -286,7 +247,6 @@ async fn test_player_reconnect() {
     .await;
 
     let reconnect_msgs = recv_msgs(&mut player_reconnect).await;
-    println!("Reconnect messages: {:?}", reconnect_msgs);
 
     let got_new_player = reconnect_msgs
         .iter()
@@ -335,35 +295,7 @@ async fn test_player_reconnect() {
 async fn test_correct_answer_gives_points() {
     let (_server, port, state) = start_test_server().await;
     let room_code = create_room_http(port).await;
-
-    {
-        let mut room_map = state.room_map.lock().await;
-        let room = room_map.get_mut(&room_code).unwrap();
-        room.categories.insert(
-            0,
-            Category {
-                title: "Category".to_string(),
-                questions: vec![Question {
-                    question: "q".to_string(),
-                    answer: "q".to_string(),
-                    value: 200,
-                    answered: false,
-                }],
-            },
-        );
-        room.categories.insert(
-            1,
-            Category {
-                title: "Category 2".to_string(),
-                questions: vec![Question {
-                    question: "qq".to_string(),
-                    answer: "qq".to_string(),
-                    value: 200,
-                    answered: false,
-                }],
-            },
-        );
-    }
+    add_room_categories(state.as_ref(), &room_code).await;
 
     let host_token = {
         let room_map = state.room_map.lock().await;
@@ -372,73 +304,17 @@ async fn test_correct_answer_gives_points() {
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
 
-    let mut player_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
-    let player_init = recv_msgs(&mut player_ws).await;
-    let _host_update = recv_msgs(&mut host_ws).await;
+    let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+    let _ = recv_msgs(&mut host_ws).await;
 
-    let player_id = if let Some(WsMsg::NewPlayer { pid, .. }) = player_init
-        .iter()
-        .find(|m| matches!(m, WsMsg::NewPlayer { .. }))
-    {
-        *pid
-    } else {
-        panic!("Should get NewPlayer");
-    };
+    start_game(&mut host_ws, &mut [&mut player_ws]).await;
 
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::StartGame {}).await;
-    let _player_start = recv_msgs(&mut player_ws).await;
-
-    send_msg_and_recv_all(
-        &mut host_ws,
-        &WsMsg::HostChoice {
-            category_index: 0,
-            question_index: 0,
-        },
-    )
-    .await;
-    let _player_choice = recv_msgs(&mut player_ws).await;
-
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::HostReady {}).await;
-    let _player_ready = recv_msgs(&mut player_ws).await;
-
-    send_msg_and_recv_all(&mut player_ws, &WsMsg::Buzz {}).await;
-    let _host_buzz = recv_msgs(&mut host_ws).await;
-
-    let score_before = {
-        let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
-        room.players
-            .iter()
-            .find(|p| p.player.pid == player_id)
-            .unwrap()
-            .player
-            .score
-    };
-    assert_eq!(score_before, 0);
-
-    let answer_msgs =
-        send_msg_and_recv_all(&mut host_ws, &WsMsg::HostChecked { correct: true }).await;
-    println!("Host got after correct answer: {:?}", answer_msgs);
-
-    let player_answer = recv_msgs(&mut player_ws).await;
-    println!("Player got after correct answer: {:?}", player_answer);
-
-    let score_after = {
-        let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
-        room.players
-            .iter()
-            .find(|p| p.player.pid == player_id)
-            .unwrap()
-            .player
-            .score
-    };
-    assert!(
-        score_after > score_before,
-        "Score should increase after correct answer"
-    );
+    play_question(&mut host_ws, &mut player_ws, 0, 0, true).await;
 
     let room_map = state.room_map.lock().await;
+    let score = get_player_score(&room_map, &room_code, player_id);
+    assert_eq!(score, 100, "Score should be 100 after correct answer");
+
     let room = room_map.get(&room_code).unwrap();
     assert!(matches!(room.state, GameState::Selection));
 }
@@ -447,35 +323,7 @@ async fn test_correct_answer_gives_points() {
 async fn test_incorrect_answer_deducts_points() {
     let (_server, port, state) = start_test_server().await;
     let room_code = create_room_http(port).await;
-
-    {
-        let mut room_map = state.room_map.lock().await;
-        let room = room_map.get_mut(&room_code).unwrap();
-        room.categories.insert(
-            0,
-            Category {
-                title: "Category".to_string(),
-                questions: vec![Question {
-                    question: "q".to_string(),
-                    answer: "q".to_string(),
-                    value: 200,
-                    answered: false,
-                }],
-            },
-        );
-        room.categories.insert(
-            1,
-            Category {
-                title: "Category 2".to_string(),
-                questions: vec![Question {
-                    question: "qq".to_string(),
-                    answer: "qq".to_string(),
-                    value: 200,
-                    answered: false,
-                }],
-            },
-        );
-    }
+    add_room_categories(state.as_ref(), &room_code).await;
 
     let host_token = {
         let room_map = state.room_map.lock().await;
@@ -484,78 +332,19 @@ async fn test_incorrect_answer_deducts_points() {
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
 
-    let mut player_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
-    let player_init = recv_msgs(&mut player_ws).await;
-    let _host_update = recv_msgs(&mut host_ws).await;
+    let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+    let _ = recv_msgs(&mut host_ws).await;
 
-    let player_id = if let Some(WsMsg::NewPlayer { pid, .. }) = player_init
-        .iter()
-        .find(|m| matches!(m, WsMsg::NewPlayer { .. }))
-    {
-        *pid
-    } else {
-        panic!("Should get NewPlayer");
-    };
+    start_game(&mut host_ws, &mut [&mut player_ws]).await;
 
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::StartGame {}).await;
-    let _player_start = recv_msgs(&mut player_ws).await;
-
-    send_msg_and_recv_all(
-        &mut host_ws,
-        &WsMsg::HostChoice {
-            category_index: 0,
-            question_index: 0,
-        },
-    )
-    .await;
-    let _player_choice = recv_msgs(&mut player_ws).await;
-
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::HostReady {}).await;
-    let _player_ready = recv_msgs(&mut player_ws).await;
-
-    send_msg_and_recv_all(&mut player_ws, &WsMsg::Buzz {}).await;
-    let _host_buzz = recv_msgs(&mut host_ws).await;
-
-    let score_before = {
-        let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
-        room.players
-            .iter()
-            .find(|p| p.player.pid == player_id)
-            .unwrap()
-            .player
-            .score
-    };
-    assert_eq!(score_before, 0);
-
-    let answer_msgs =
-        send_msg_and_recv_all(&mut host_ws, &WsMsg::HostChecked { correct: false }).await;
-    println!("Host got after correct answer: {:?}", answer_msgs);
-
-    let player_answer = recv_msgs(&mut player_ws).await;
-    println!("Player got after correct answer: {:?}", player_answer);
-
-    let score_after = {
-        let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
-        room.players
-            .iter()
-            .find(|p| p.player.pid == player_id)
-            .unwrap()
-            .player
-            .score
-    };
-    assert!(
-        score_after < score_before,
-        "Score should decrease after incorrect answer"
-    );
+    play_question(&mut host_ws, &mut player_ws, 0, 0, false).await;
 
     let room_map = state.room_map.lock().await;
+    let score = get_player_score(&room_map, &room_code, player_id);
+    assert_eq!(score, -100, "Score should be -100 after correct answer");
+
     let room = room_map.get(&room_code).unwrap();
-    assert!(matches!(
-        room.state,
-        madhacks2025::game::GameState::Selection
-    ));
+    assert!(matches!(room.state, GameState::Selection));
 }
 
 #[tokio::test]
@@ -563,35 +352,6 @@ async fn test_host_reconnect() {
     let (_server, port, state) = start_test_server().await;
     let room_code = create_room_http(port).await;
 
-    {
-        let mut room_map = state.room_map.lock().await;
-        let room = room_map.get_mut(&room_code).unwrap();
-        room.categories.insert(
-            0,
-            Category {
-                title: "Category".to_string(),
-                questions: vec![Question {
-                    question: "q".to_string(),
-                    answer: "q".to_string(),
-                    value: 200,
-                    answered: false,
-                }],
-            },
-        );
-        room.categories.insert(
-            1,
-            Category {
-                title: "Category 2".to_string(),
-                questions: vec![Question {
-                    question: "qq".to_string(),
-                    answer: "qq".to_string(),
-                    value: 200,
-                    answered: false,
-                }],
-            },
-        );
-    }
-
     let host_token = {
         let room_map = state.room_map.lock().await;
         room_map.get(&room_code).unwrap().host_token.clone()
@@ -600,12 +360,10 @@ async fn test_host_reconnect() {
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
 
-    let mut player_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
-    let _player_init = recv_msgs(&mut player_ws).await;
-    let _host_update = recv_msgs(&mut host_ws).await;
+    let (mut player_ws, _player_id) = add_player(port, &room_code, "AJ").await;
+    let _ = recv_msgs(&mut host_ws).await;
 
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::StartGame {}).await;
-    let _player_start = recv_msgs(&mut player_ws).await;
+    start_game(&mut host_ws, &mut [&mut player_ws]).await;
 
     send_msg_and_recv_all(
         &mut host_ws,
@@ -615,7 +373,7 @@ async fn test_host_reconnect() {
         },
     )
     .await;
-    let _player_choice = recv_msgs(&mut player_ws).await;
+    let _ = recv_msgs(&mut player_ws).await;
 
     let state_before = {
         let room_map = state.room_map.lock().await;
@@ -630,9 +388,7 @@ async fn test_host_reconnect() {
 
     let mut host_reconnect =
         connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
-
     let reconnect_msgs = recv_msgs(&mut host_reconnect).await;
-    println!("Host reconnect messages: {:?}", reconnect_msgs);
 
     let game_state_msg = reconnect_msgs
         .iter()
@@ -677,31 +433,7 @@ async fn test_host_reconnect() {
 async fn test_full_game() {
     let (_server, port, state) = start_test_server().await;
     let room_code = create_room_http(port).await;
-
-    {
-        let mut room_map = state.room_map.lock().await;
-        let room = room_map.get_mut(&room_code).unwrap();
-        room.categories.insert(
-            0,
-            Category {
-                title: "Test Category".to_string(),
-                questions: vec![
-                    Question {
-                        question: "Question 1".to_string(),
-                        answer: "Answer 1".to_string(),
-                        value: 100,
-                        answered: false,
-                    },
-                    Question {
-                        question: "Question 2".to_string(),
-                        answer: "Answer 2".to_string(),
-                        value: 200,
-                        answered: false,
-                    },
-                ],
-            },
-        );
-    }
+    add_room_categories(state.as_ref(), &room_code).await;
 
     let host_token = {
         let room_map = state.room_map.lock().await;
@@ -711,151 +443,54 @@ async fn test_full_game() {
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
 
-    let mut aj_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
-    let aj_init = recv_msgs(&mut aj_ws).await;
-    let _host_update1 = recv_msgs(&mut host_ws).await;
+    let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+    let _ = recv_msgs(&mut host_ws).await;
 
-    let aj_id = aj_init
-        .iter()
-        .find_map(|m| {
-            if let WsMsg::NewPlayer { pid, .. } = m {
-                Some(*pid)
-            } else {
-                None
-            }
-        })
-        .unwrap();
+    let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+    let _ = recv_msgs(&mut host_ws).await;
 
-    let mut sam_ws = connect_ws_client(port, &room_code, "?playerName=Sam").await;
-    let sam_init = recv_msgs(&mut sam_ws).await;
-    let _host_update2 = recv_msgs(&mut host_ws).await;
+    start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws]).await;
 
-    let sam_id = sam_init
-        .iter()
-        .find_map(|m| {
-            if let WsMsg::NewPlayer { pid, .. } = m {
-                Some(*pid)
-            } else {
-                None
-            }
-        })
-        .unwrap();
-
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::StartGame {}).await;
-    let _aj_start = recv_msgs(&mut aj_ws).await;
-    let _sam_start = recv_msgs(&mut sam_ws).await;
-
-    send_msg_and_recv_all(
-        &mut host_ws,
-        &WsMsg::HostChoice {
-            category_index: 0,
-            question_index: 0,
-        },
-    )
-    .await;
-    let _aj_choice1 = recv_msgs(&mut aj_ws).await;
-    let _sam_choice1 = recv_msgs(&mut sam_ws).await;
-
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::HostReady {}).await;
-    let _aj_ready1 = recv_msgs(&mut aj_ws).await;
-    let _sam_ready1 = recv_msgs(&mut sam_ws).await;
-
-    send_msg_and_recv_all(&mut aj_ws, &WsMsg::Buzz {}).await;
-    let _host_buzz1 = recv_msgs(&mut host_ws).await;
-    let _sam_buzz1 = recv_msgs(&mut sam_ws).await;
-
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::HostChecked { correct: true }).await;
-    let _aj_answer1 = recv_msgs(&mut aj_ws).await;
-    let _sam_answer1 = recv_msgs(&mut sam_ws).await;
+    // Question 1: AJ buzzes and gets it correct (+100)
+    play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
+    let _ = recv_msgs(&mut sam_ws).await;
 
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
-        let aj = room.players.iter().find(|p| p.player.pid == aj_id).unwrap();
-        assert_eq!(aj.player.score, 100);
+        assert_eq!(get_player_score(&room_map, &room_code, aj_id), 100);
     }
 
-    send_msg_and_recv_all(
-        &mut host_ws,
-        &WsMsg::HostChoice {
-            category_index: 0,
-            question_index: 1,
-        },
-    )
-    .await;
-    let _aj_choice2 = recv_msgs(&mut aj_ws).await;
-    let _sam_choice2 = recv_msgs(&mut sam_ws).await;
-
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::HostReady {}).await;
-    let _aj_ready2 = recv_msgs(&mut aj_ws).await;
-    let _sam_ready2 = recv_msgs(&mut sam_ws).await;
-
-    send_msg_and_recv_all(&mut sam_ws, &WsMsg::Buzz {}).await;
-    let _host_buzz2 = recv_msgs(&mut host_ws).await;
-    let _aj_buzz2 = recv_msgs(&mut aj_ws).await;
-
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::HostChecked { correct: false }).await;
-    let _aj_answer2 = recv_msgs(&mut aj_ws).await;
-    let _sam_answer2 = recv_msgs(&mut sam_ws).await;
+    // Question 2: Sam buzzes and gets it incorrect (-200)
+    play_question(&mut host_ws, &mut sam_ws, 0, 1, false).await;
+    let _ = recv_msgs(&mut aj_ws).await;
 
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
-        let aj = room.players.iter().find(|p| p.player.pid == aj_id).unwrap();
-        let sam = room
-            .players
-            .iter()
-            .find(|p| p.player.pid == sam_id)
-            .unwrap();
-        assert_eq!(aj.player.score, 100);
-        assert_eq!(sam.player.score, -200);
+        assert_eq!(get_player_score(&room_map, &room_code, aj_id), 100);
+        assert_eq!(get_player_score(&room_map, &room_code, sam_id), -200);
     }
 
-    send_msg_and_recv_all(
-        &mut host_ws,
-        &WsMsg::HostChoice {
-            category_index: 0,
-            question_index: 1,
-        },
-    )
-    .await;
-    let _aj_choice3 = recv_msgs(&mut aj_ws).await;
-    let _sam_choice3 = recv_msgs(&mut sam_ws).await;
+    // Question 2 again: AJ buzzes and gets it correct (+200 = 300 total)
+    play_question(&mut host_ws, &mut aj_ws, 0, 1, true).await;
+    let _ = recv_msgs(&mut sam_ws).await;
 
-    send_msg_and_recv_all(&mut host_ws, &WsMsg::HostReady {}).await;
-    let _aj_ready3 = recv_msgs(&mut aj_ws).await;
-    let _sam_ready3 = recv_msgs(&mut sam_ws).await;
+    // Question 3: AJ buzzes and gets it correct (+400 = 600 total)
+    play_question(&mut host_ws, &mut aj_ws, 0, 2, true).await;
+    let _ = recv_msgs(&mut sam_ws).await;
 
-    send_msg_and_recv_all(&mut aj_ws, &WsMsg::Buzz {}).await;
-    let _host_buzz3 = recv_msgs(&mut host_ws).await;
-    let _sam_answer3 = recv_msgs(&mut sam_ws).await;
-
-    let host_answer3 =
-        send_msg_and_recv_all(&mut host_ws, &WsMsg::HostChecked { correct: true }).await;
-    let _aj_answer3 = recv_msgs(&mut aj_ws).await;
-    let _sam_answer3 = recv_msgs(&mut sam_ws).await;
-
-    let game_end = host_answer3.iter().any(|m| {
-        matches!(
-            m,
-            WsMsg::GameState {
-                state: GameState::GameEnd,
-                ..
-            }
-        )
-    });
-    assert!(game_end, "Game should end after last question");
     {
         let room_map = state.room_map.lock().await;
         let room = room_map.get(&room_code).unwrap();
-        let aj = room.players.iter().find(|p| p.player.pid == aj_id).unwrap();
-        let sam = room
-            .players
-            .iter()
-            .find(|p| p.player.pid == sam_id)
-            .unwrap();
-        assert_eq!(aj.player.score, 300, "AJ should have 300 points");
-        assert_eq!(sam.player.score, -200, "Sam should have -200 points");
+        assert_eq!(
+            get_player_score(&room_map, &room_code, aj_id),
+            600,
+            "AJ should have 600 points"
+        );
+        assert_eq!(
+            get_player_score(&room_map, &room_code, sam_id),
+            -200,
+            "Sam should have -200 points"
+        );
         assert!(matches!(room.state, GameState::GameEnd));
     }
 }
