@@ -3,6 +3,14 @@ name = "madhacks2025"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "madhacks2025"
+path = "src/lib.rs"
+
+[[bin]]
+name = "madhacks2025"
+path = "src/main.rs"
+
 [dependencies]
 axum = { version = "0.8.7", features = ["ws"] }
 serde = { version = "1.0.228", features = ["derive"] }
