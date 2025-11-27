@@ -494,3 +494,267 @@ async fn test_full_game() {
         assert!(matches!(room.state, GameState::GameEnd));
     }
 }
+
+#[tokio::test]
+async fn test_concurrent_buzzes() {
+    let (_server, port, state) = start_test_server().await;
+    let room_code = create_room_http(port).await;
+    add_room_categories(&state, &room_code).await;
+
+    let host_token = {
+        let room_map = state.room_map.lock().await;
+        room_map.get(&room_code).unwrap().host_token.clone()
+    };
+    let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+    let _initial = recv_msgs(&mut host_ws).await;
+
+    let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+    let _ = recv_msgs(&mut host_ws).await;
+
+    let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+    let _ = recv_msgs(&mut host_ws).await;
+
+    start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws]).await;
+
+    send_msg_and_recv_all(
+        &mut host_ws,
+        &WsMsg::HostChoice {
+            category_index: 0,
+            question_index: 0,
+        },
+    )
+    .await;
+
+    let _ = recv_msgs(&mut aj_ws).await;
+    let _ = recv_msgs(&mut sam_ws).await;
+
+    send_msg_and_recv_all(&mut host_ws, &WsMsg::HostReady {}).await;
+    let _ = recv_msgs(&mut aj_ws).await;
+    let _ = recv_msgs(&mut sam_ws).await;
+
+    let aj_buzz = tokio::spawn({
+        let mut ws = aj_ws;
+        async move {
+            send_msg_and_recv_all(&mut ws, &WsMsg::Buzz {}).await;
+            ws
+        }
+    });
+
+    let sam_buzz = tokio::spawn({
+        let mut ws = sam_ws;
+        async move {
+            send_msg_and_recv_all(&mut ws, &WsMsg::Buzz {}).await;
+            ws
+        }
+    });
+
+    let mut aj_ws = aj_buzz.await.unwrap();
+    let mut sam_ws = sam_buzz.await.unwrap();
+
+    let host_msgs = recv_msgs(&mut host_ws).await;
+    let buzz_count = host_msgs
+        .iter()
+        .filter(|m| matches!(m, WsMsg::Buzzed { .. }))
+        .count();
+    assert_eq!(buzz_count, 1, "Host should receive exactly one buzz");
+
+    let buzzed_player = host_msgs
+        .iter()
+        .find_map(|m| {
+            if let WsMsg::Buzzed { pid, .. } = m {
+                Some(*pid)
+            } else {
+                None
+            }
+        })
+        .expect("Should have a buzzed player");
+
+    assert!(
+        buzzed_player == aj_id || buzzed_player == sam_id,
+        "Buzzed player should be either Alice or Bob"
+    );
+
+    {
+        let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).unwrap();
+        assert_eq!(
+            room.current_buzzer,
+            Some(buzzed_player),
+            "Only one player should be the buzzer"
+        );
+
+        let buzzer = room
+            .players
+            .iter()
+            .find(|p| p.player.pid == buzzed_player)
+            .unwrap();
+        assert!(buzzer.player.buzzed, "Buzzer should be marked as buzzed");
+    }
+}
+
+#[tokio::test]
+async fn test_concurrent_player_joins() {
+    let (_server, port, state) = start_test_server().await;
+    let room_code = create_room_http(port).await;
+
+    let host_token = {
+        let room_map = state.room_map.lock().await;
+        room_map.get(&room_code).unwrap().host_token.clone()
+    };
+    let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+    let _initial = recv_msgs(&mut host_ws).await;
+
+    let mut join_handles = vec![];
+    for i in 0..5 {
+        let room_code = room_code.clone();
+        let handle = tokio::spawn(async move {
+            let name = format!("Player{}", i);
+            add_player(port, &room_code, &name).await
+        });
+        join_handles.push(handle);
+    }
+
+    let mut player_ids = vec![];
+    for handle in join_handles {
+        let (_ws, id) = handle.await.unwrap();
+        player_ids.push(id);
+    }
+
+    sleep(Duration::from_millis(200)).await;
+
+    {
+        let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).unwrap();
+        assert_eq!(room.players.len(), 5, "Should have 5 players");
+    }
+
+    let mut unique_ids = player_ids.clone();
+    unique_ids.sort();
+    unique_ids.dedup();
+    assert_eq!(
+        unique_ids.len(),
+        player_ids.len(),
+        "All player IDs should be unique"
+    );
+
+    let final_msgs = recv_msgs(&mut host_ws).await;
+    let final_list = final_msgs.iter().rev().find_map(|m| {
+        if let WsMsg::PlayerList(players) = m {
+            Some(players)
+        } else {
+            None
+        }
+    });
+
+    if let Some(players) = final_list {
+        assert_eq!(players.len(), 5, "Final player list should have 5 players");
+    }
+}
+
+#[tokio::test]
+async fn test_heartbeat_roundtrip() {
+    let (_server, port, state) = start_test_server().await;
+    let room_code = create_room_http(port).await;
+
+    let host_token = {
+        let room_map = state.room_map.lock().await;
+        room_map.get(&room_code).unwrap().host_token.clone()
+    };
+    let mut _host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+    let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+
+    let url = format!("http://127.0.0.1:{}/api/v1/rooms/{}/cpr", port, room_code);
+    let _response = reqwest::get(&url).await.expect("CPR request failed");
+
+    let player_msgs = recv_msgs(&mut player_ws).await;
+
+    let do_heartbeat = player_msgs.iter().find_map(|m| {
+        if let WsMsg::DoHeartbeat { hbid, t_sent } = m {
+            Some((*hbid, *t_sent))
+        } else {
+            None
+        }
+    });
+
+    assert!(do_heartbeat.is_some(), "Player should receive DoHeartbeat");
+
+    let (hbid, t_sent) = do_heartbeat.unwrap();
+
+    let t_dohb_recv = PlayerEntry::time_ms();
+    let got_msgs =
+        send_msg_and_recv_all(&mut player_ws, &WsMsg::Heartbeat { hbid, t_dohb_recv }).await;
+
+    let got_heartbeat = got_msgs
+        .iter()
+        .any(|m| matches!(m, WsMsg::GotHeartbeat { hbid: id } if *id == hbid));
+
+    assert!(got_heartbeat, "Player should receive GotHeartbeat");
+
+    let t_lat = PlayerEntry::time_ms() - t_sent;
+    send_msg_and_recv_all(&mut player_ws, &WsMsg::LatencyOfHeartbeat { hbid, t_lat }).await;
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    {
+        let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).unwrap();
+        let player = room
+            .players
+            .iter()
+            .find(|p| p.player.pid == player_id)
+            .unwrap();
+
+        let latency = player.latency().unwrap();
+        assert!(latency > 0, "Latency should be recorded");
+    }
+}
+
+#[tokio::test]
+async fn test_heartbeat_with_invalid_hbid() {
+    let (_server, port, state) = start_test_server().await;
+    let room_code = create_room_http(port).await;
+
+    let host_token = {
+        let room_map = state.room_map.lock().await;
+        room_map.get(&room_code).unwrap().host_token.clone()
+    };
+    let mut _host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+
+    let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+
+    let invalid_hbid = 99999;
+    let t_dohb_recv = PlayerEntry::time_ms();
+    send_msg_and_recv_all(
+        &mut player_ws,
+        &WsMsg::Heartbeat {
+            hbid: invalid_hbid,
+            t_dohb_recv,
+        },
+    )
+    .await;
+
+    let got_msgs = recv_msgs(&mut player_ws).await;
+    let got_heartbeat = got_msgs
+        .iter()
+        .any(|m| matches!(m, WsMsg::GotHeartbeat { .. }));
+
+    assert!(
+        !got_heartbeat,
+        "Should not receive GotHeartbeat for invalid hbid"
+    );
+
+    // Latency should remain 0
+    {
+        let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).unwrap();
+        let player = room
+            .players
+            .iter()
+            .find(|p| p.player.pid == player_id)
+            .unwrap();
+        assert_eq!(
+            player.latency().unwrap(),
+            0,
+            "Latency should remain 0 with invalid hbid"
+        );
+    }
+}
