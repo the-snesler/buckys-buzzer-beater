@@ -32,8 +32,25 @@ mod host;
 mod player;
 mod ws_msg;
 
-struct AppState {
-    room_map: Mutex<HashMap<String, Room>>,
+pub fn build_app(state: Arc<AppState>) -> Router {
+    let room_routes = Router::new()
+        .route("/create", post(create_room))
+        .route("/{code}/ws", any(ws_upgrade_handler))
+        .route("/{code}/cpr", get(cpr_handler))
+        .with_state(state);
+
+    let api_routes = Router::new().nest("/rooms", room_routes);
+
+    Router::new()
+        .route("/health", get(|| async { "Server is up" }))
+        .nest("/api/v1", api_routes)
+        .fallback_service(
+            ServeDir::new("public").not_found_service(ServeFile::new("public/index.html")),
+        )
+}
+
+pub struct AppState {
+    pub room_map: Mutex<HashMap<String, Room>>,
 }
 
 impl AppState {
@@ -413,21 +430,7 @@ const PORT: u16 = 3000;
 #[tokio::main]
 async fn main() -> Result<()> {
     let state = Arc::new(AppState::new());
-
-    let room_routes = Router::new()
-        .route("/create", post(create_room))
-        .route("/{code}/ws", any(ws_upgrade_handler))
-        .route("/{code}/cpr", get(cpr_handler))
-        .with_state(state);
-
-    let api_routes = Router::new().nest("/rooms", room_routes);
-
-    let app = Router::new()
-        .route("/health", get(|| async { "Server is up" }))
-        .nest("/api/v1", api_routes)
-        .fallback_service(
-            ServeDir::new("public").not_found_service(ServeFile::new("public/index.html")),
-        );
+    let app = build_app(state);
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", HOST, PORT)).await?;
     println!("Server running on http://{}:{}", HOST, PORT);
