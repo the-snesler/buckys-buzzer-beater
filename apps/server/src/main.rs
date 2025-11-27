@@ -30,7 +30,7 @@ use crate::{
 mod game;
 mod host;
 mod player;
-mod ws_msg;
+pub mod ws_msg;
 
 pub fn build_app(state: Arc<AppState>) -> Router {
     let room_routes = Router::new()
@@ -138,7 +138,7 @@ async fn create_room(
 }
 
 #[derive(Debug)]
-enum ConnectionStatus {
+pub enum ConnectionStatus {
     Connected,
 }
 #[derive(Serialize, Deserialize)]
@@ -440,5 +440,5 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-type HeartbeatId = u32;
-type UnixMs = u64; // # of milliseconds since unix epoch, or delta thereof
+pub type HeartbeatId = u32;
+pub type UnixMs = u64; // # of milliseconds since unix epoch, or delta thereof
