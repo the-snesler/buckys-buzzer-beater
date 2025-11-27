@@ -331,12 +331,6 @@ pub enum GameState {
     GameEnd,
 }
 
-impl Default for GameState {
-    fn default() -> Self {
-        Self::Start
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,25 +338,23 @@ mod tests {
     fn create_test_room() -> Room {
         let mut room = Room::new("TEST".to_string(), "token".to_string());
 
-        room.categories = vec![
-            Category {
-                title: "Test Category".to_string(),
-                questions: vec![
-                    Question {
-                        question: "What is 2+2?".to_string(),
-                        answer: "4".to_string(),
-                        value: 200,
-                        answered: false,
-                    },
-                    Question {
-                        question: "What is 6?".to_string(),
-                        answer: "6".to_string(),
-                        value: 400,
-                        answered: false,
-                    },
-                ]
-            }
-        ];
+        room.categories = vec![Category {
+            name: "Test Category".to_string(),
+            questions: vec![
+                Question {
+                    question: "What is 2+2?".to_string(),
+                    answer: "4".to_string(),
+                    value: 200,
+                    answered: false,
+                },
+                Question {
+                    question: "What is 6?".to_string(),
+                    answer: "6".to_string(),
+                    value: 400,
+                    answered: false,
+                },
+            ],
+        }];
 
         room
     }
@@ -481,8 +473,115 @@ mod tests {
 
             room.handle_message(&tc.message, tc.sender_id);
 
-            assert_eq!(room.state, tc.expected_state, "Test case failed: {}", tc.name);
+            assert_eq!(
+                room.state, tc.expected_state,
+                "Test case failed: {}",
+                tc.name
+            );
             (tc.assertions)(&room)
+        }
+    }
+
+    #[test]
+    fn test_scoring() {
+        struct TestCase {
+            name: &'static str,
+            setup: fn(&mut Room),
+            correct: bool,
+            expected_score: i32,
+            expected_state: GameState,
+            question_answered: bool,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Correct answer awards points",
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    room.state = GameState::Answer;
+                    room.current_question = Some((0, 0));
+                    room.current_buzzer = Some(1);
+                },
+                correct: true,
+                expected_score: 200,
+                expected_state: GameState::Selection,
+                question_answered: true,
+            },
+            TestCase {
+                name: "Incorrect answer deducts points",
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    add_test_player(room, 2, "Sam");
+                    room.state = GameState::Answer;
+                    room.current_question = Some((0, 0));
+                    room.current_buzzer = Some(1);
+                    room.players[0].player.buzzed = true;
+                },
+                correct: false,
+                expected_score: -200,
+                expected_state: GameState::WaitingForBuzz,
+                question_answered: false,
+            },
+            TestCase {
+                name: "All players wrong marks question answered",
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    add_test_player(room, 2, "Sam");
+                    room.state = GameState::Answer;
+                    room.current_question = Some((0, 0));
+                    room.current_buzzer = Some(1);
+                    room.players[0].player.buzzed = true;
+                    room.players[1].player.buzzed = true;
+                },
+                correct: false,
+                expected_score: -200,
+                expected_state: GameState::Selection,
+                question_answered: true,
+            },
+            TestCase {
+                name: "Game ends when no questions remain",
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    room.state = GameState::Answer;
+                    room.categories[0].questions[0].answered = true;
+                    room.current_question = Some((0, 1));
+                    room.current_buzzer = Some(1);
+                },
+                correct: true,
+                expected_score: 400,
+                expected_state: GameState::GameEnd,
+                question_answered: true,
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = create_test_room();
+            (tc.setup)(&mut room);
+
+            let (cat_idx, q_idx) = room.current_question.unwrap();
+
+            room.handle_message(
+                &WsMsg::HostChecked {
+                    correct: tc.correct,
+                },
+                None,
+            );
+
+            assert_eq!(
+                room.players[0].player.score, tc.expected_score,
+                "Test case failed (score): {}",
+                tc.name
+            );
+            assert_eq!(
+                room.state, tc.expected_state,
+                "Test case failed (state): {}",
+                tc.name
+            );
+            assert_eq!(
+                room.categories[cat_idx].questions[q_idx].answered, tc.question_answered,
+                "Test case failed (answered): {}",
+                tc.name
+            );
         }
     }
 }
