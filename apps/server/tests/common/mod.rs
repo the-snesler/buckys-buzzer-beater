@@ -137,7 +137,7 @@ pub async fn create_room_http(port: u16) -> String {
 }
 
 /// Add categories to an existing room
-pub async fn add_room_categories(state: &mut AppState, room_code: &str) {
+pub async fn add_room_categories(state: &AppState, room_code: &str) {
     let mut room_map = state.room_map.lock().await;
     let room = room_map
         .get_mut(room_code)
