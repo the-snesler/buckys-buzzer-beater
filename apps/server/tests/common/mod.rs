@@ -1,13 +1,16 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
+use madhacks2025::game::{Category, Question};
+use tokio::sync::MutexGuard;
 use tokio::{net::TcpStream, task::JoinHandle};
 use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use madhacks2025::ws_msg::WsMsg;
-use madhacks2025::{AppState, build_app};
+use madhacks2025::{AppState, Room, build_app};
 
 pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -131,4 +134,102 @@ pub async fn create_room_http(port: u16) -> String {
         .as_str()
         .expect("No room_code in response")
         .to_string()
+}
+
+/// Add categories to an existing room
+pub async fn add_room_categories(state: &mut AppState, room_code: &str) {
+    let mut room_map = state.room_map.lock().await;
+    let room = room_map
+        .get_mut(room_code)
+        .expect(format!("Failed to get room with code: {}", room_code).as_str());
+
+    let questions: Vec<Question> = (0..=2)
+        .map(|i| Question {
+            question: format!("Question {}", i + 1),
+            answer: format!("Answer {}", i + 1),
+            value: (i as u32 + 1) * 100,
+            answered: false,
+        })
+        .collect();
+
+    room.categories.insert(
+        0,
+        Category {
+            questions: questions,
+            name: "Category 1".to_string(),
+        },
+    );
+}
+
+/// Add a player and return their websocket and ID
+pub async fn add_player(port: u16, room_code: &str, name: &str) -> (WsStream, u32) {
+    let mut player_ws = connect_ws_client(port, room_code, &format!("?playerName={}", name)).await;
+    let msgs = recv_msgs(&mut player_ws).await;
+
+    let player_id = msgs
+        .iter()
+        .find_map(|m| {
+            if let WsMsg::NewPlayer { pid, .. } = m {
+                Some(*pid)
+            } else {
+                None
+            }
+        })
+        .expect("Should receive NewPlayer message");
+
+    (player_ws, player_id)
+}
+
+pub async fn play_question(
+    host_ws: &mut WsStream,
+    player_ws: &mut WsStream,
+    c_idx: usize,
+    q_idx: usize,
+    correct: bool,
+) {
+    send_msg_and_recv_all(
+        host_ws,
+        &WsMsg::HostChoice {
+            category_index: c_idx,
+            question_index: q_idx,
+        },
+    )
+    .await;
+    let _ = recv_msgs(player_ws).await;
+
+    // Host starts question
+    send_msg_and_recv_all(host_ws, &WsMsg::HostReady {}).await;
+    let _ = recv_msgs(player_ws).await;
+
+    // Player buzz
+    send_msg_and_recv_all(player_ws, &WsMsg::Buzz {}).await;
+    let _ = recv_msgs(host_ws).await;
+
+    // Host checks answer
+    send_msg_and_recv_all(host_ws, &WsMsg::HostChecked { correct }).await;
+    let _ = recv_msgs(player_ws).await;
+}
+
+/// Get player score from room map
+pub fn get_player_score(
+    room_map: &MutexGuard<HashMap<String, Room>>,
+    room_code: &str,
+    player_id: u32,
+) -> i32 {
+    let room = room_map.get(room_code).unwrap();
+    room.players
+        .iter()
+        .find(|p| p.player.pid == player_id)
+        .unwrap()
+        .player
+        .score
+}
+
+/// Start game and consume initial messages
+pub async fn start_game(host_ws: &mut WsStream, player_ws_list: &mut [&mut WsStream]) {
+    send_msg_and_recv_all(host_ws, &WsMsg::StartGame {}).await;
+
+    for player_ws in player_ws_list {
+        let _ = recv_msgs(*player_ws).await;
+    }
 }
