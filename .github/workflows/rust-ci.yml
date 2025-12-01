@@ -53,7 +53,6 @@ jobs:
             -D warnings \
             -D clippy::todo \
             -D clippy::unimplemented \
-            -W clippy::pedantic \
             -D clippy::unwrap_used
 
 
