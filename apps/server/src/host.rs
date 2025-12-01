@@ -1,9 +1,8 @@
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-use tokio_mpmc::{ChannelError, Sender};
+use tokio_mpmc::Sender;
 
-use crate::{player::PlayerId, ws_msg::WsMsg};
+use crate::ws_msg::WsMsg;
 
 pub struct HostEntry {
     pub pid: u32,
@@ -24,3 +23,4 @@ impl HostEntry {
         Self { pid, sender }
     }
 }
+

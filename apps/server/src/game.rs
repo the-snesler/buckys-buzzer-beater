@@ -62,22 +62,6 @@ impl Room {
             current_buzzer: None,
         }
     }
-
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-
-    pub fn host_token(&self) -> &str {
-        &self.host_token
-    }
-
-    pub fn set_host(&mut self, host: HostEntry) {
-        self.host = Some(host);
-    }
-
-    pub fn verify_host_token(&self, token: &str) -> bool {
-        self.host_token == token
-    }
 }
 
 impl Room {
