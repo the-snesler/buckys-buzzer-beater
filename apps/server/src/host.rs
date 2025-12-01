@@ -23,4 +23,3 @@ impl HostEntry {
         Self { pid, sender }
     }
 }
-
