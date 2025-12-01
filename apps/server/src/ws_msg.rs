@@ -1,13 +1,10 @@
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     HeartbeatId, UnixMs,
     game::{Category, GameState},
     player::{Player, PlayerId},
 };
-
-pub type WsMsgChannel = (Sender<WsMsg>, Receiver<WsMsg>);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum WsMsg {

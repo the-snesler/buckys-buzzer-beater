@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio_mpmc::{ChannelError, Sender};
+use tokio_mpmc::Sender;
 
 use crate::{ConnectionStatus, HeartbeatId, UnixMs, ws_msg::WsMsg};
 
@@ -59,15 +59,6 @@ impl PlayerEntry {
             status: ConnectionStatus::Connected,
             hbid_counter: 0,
         }
-    }
-
-    pub fn did_buzz(&self) -> bool {
-        self.player.buzzed
-    }
-
-    pub async fn update(&self, msg: &WsMsg) -> Result<(), ChannelError> {
-        self.sender.send(msg.clone()).await?;
-        Ok(())
     }
 }
 

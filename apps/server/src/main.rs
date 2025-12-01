@@ -123,7 +123,6 @@ async fn create_room(
 #[derive(Debug)]
 enum ConnectionStatus {
     Connected,
-    Disconnected,
 }
 #[derive(Serialize, Deserialize)]
 struct RoomParams {
