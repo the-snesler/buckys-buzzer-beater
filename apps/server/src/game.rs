@@ -1,19 +1,17 @@
 use std::fmt;
 
-use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
-use tokio_mpmc::Sender;
 
 use crate::{
     PlayerEntry,
     host::HostEntry,
     player::{Player, PlayerId},
-    ws_msg::{WsMsg, WsMsgChannel},
+    ws_msg::WsMsg,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Question {
-    pub question: String,
+    pub text: String,
     pub answer: String,
     pub value: u32,
     pub answered: bool,
@@ -41,6 +39,8 @@ impl fmt::Debug for Room {
         f.debug_struct("Room")
             .field("code", &self.code)
             .field("host_token", &self.host_token)
+            .field("host", &self.host)
+            .field("state", &self.state)
             .field("players", &self.players)
             .field("category count", &self.categories.len())
             .field("current question", &self.current_question)
@@ -154,46 +154,43 @@ impl Room {
             }
 
             WsMsg::Buzz {} => {
-                if self.state == GameState::WaitingForBuzz {
-                    if let Some(player_id) = pid {
-                        if let Some(player_entry) =
-                            self.players.iter_mut().find(|p| p.player.pid == player_id)
-                        {
-                            if !player_entry.player.buzzed {
-                                player_entry.player.buzzed = true;
-                                self.current_buzzer = Some(player_id);
-                                self.state = GameState::Answer;
+                if self.state == GameState::WaitingForBuzz
+                    && let Some(player_id) = pid
+                    && let Some(player_entry) =
+                        self.players.iter_mut().find(|p| p.player.pid == player_id)
+                    && !player_entry.player.buzzed
+                {
+                    player_entry.player.buzzed = true;
+                    self.current_buzzer = Some(player_id);
+                    self.state = GameState::Answer;
 
-                                if let Some(host) = &self.host {
-                                    let buzzed_msg = WsMsg::Buzzed {
-                                        pid: player_id,
-                                        name: player_entry.player.name.clone(),
-                                    };
-                                    host.sender.send(buzzed_msg).await?;
-                                }
-
-                                self.broadcast_state().await?;
-                                self.broadcast_player_states().await?;
-                            }
-                        }
+                    if let Some(host) = &self.host {
+                        let buzzed_msg = WsMsg::Buzzed {
+                            pid: player_id,
+                            name: player_entry.player.name.clone(),
+                        };
+                        host.sender.send(buzzed_msg).await?;
                     }
+
+                    self.broadcast_state().await?;
+                    self.broadcast_player_states().await?;
                 }
             }
 
             WsMsg::HostChecked { correct } => {
                 if let Some((cat_idx, q_idx)) = self.current_question {
                     if *correct {
-                        if let Some(category) = self.categories.get_mut(cat_idx) {
-                            if let Some(question) = category.questions.get_mut(q_idx) {
-                                question.answered = true;
+                        if let Some(category) = self.categories.get_mut(cat_idx)
+                            && let Some(question) = category.questions.get_mut(q_idx)
+                        {
+                            question.answered = true;
 
-                                if let Some(buzzer_id) = self.current_buzzer {
-                                    if let Some(player) =
-                                        self.players.iter_mut().find(|p| p.player.pid == buzzer_id)
-                                    {
-                                        player.player.score += question.value as i32;
-                                    }
-                                }
+                            if let Some(buzzer_id) = self.current_buzzer
+                                && let Some(player) =
+                                    self.players.iter_mut().find(|p| p.player.pid == buzzer_id)
+                            {
+                                let incr: i32 = question.value.try_into()?;
+                                player.player.score += incr;
                             }
                         }
                         self.current_question = None;
@@ -205,26 +202,24 @@ impl Room {
                             self.state = GameState::GameEnd;
                         }
                     } else {
-                        if let Some(category) = self.categories.get(cat_idx) {
-                            if let Some(question) = category.questions.get(q_idx) {
-                                if let Some(buzzer_id) = self.current_buzzer {
-                                    if let Some(player) =
-                                        self.players.iter_mut().find(|p| p.player.pid == buzzer_id)
-                                    {
-                                        player.player.score -= question.value as i32;
-                                    }
-                                }
-                            }
+                        if let Some(category) = self.categories.get(cat_idx)
+                            && let Some(question) = category.questions.get(q_idx)
+                            && let Some(buzzer_id) = self.current_buzzer
+                            && let Some(player) =
+                                self.players.iter_mut().find(|p| p.player.pid == buzzer_id)
+                        {
+                            let decr: i32 = question.value.try_into()?;
+                            player.player.score -= decr;
                         }
                         let any_can_buzz = self.players.iter().any(|p| !p.player.buzzed);
                         if any_can_buzz {
                             self.current_buzzer = None;
                             self.state = GameState::WaitingForBuzz;
                         } else {
-                            if let Some(category) = self.categories.get_mut(cat_idx) {
-                                if let Some(question) = category.questions.get_mut(q_idx) {
-                                    question.answered = true;
-                                }
+                            if let Some(category) = self.categories.get_mut(cat_idx)
+                                && let Some(question) = category.questions.get_mut(q_idx)
+                            {
+                                question.answered = true;
                             }
                             self.current_question = None;
                             self.current_buzzer = None;
@@ -248,13 +243,13 @@ impl Room {
             }
             WsMsg::Heartbeat { hbid, t_dohb_recv } => {
                 if let Some(entry) = own_entry {
-                    if !entry.on_know_dohb_recv(*hbid, *t_dohb_recv) {
-                        println!("WARN: failed to update DoHeartbeat recv time");
-                    } else {
+                    if entry.on_know_dohb_recv(*hbid, *t_dohb_recv) {
                         println!("successfully updated dohb_recv");
+                    } else {
+                        println!("WARN: failed to update DoHeartbeat recv time");
                     }
                 } else {
-                    println!("WARN: own entry missing handling Heartbeat, continuing anyway")
+                    println!("WARN: own entry missing handling Heartbeat, continuing anyway");
                 }
             }
             WsMsg::LatencyOfHeartbeat { hbid, t_lat } => {
@@ -288,19 +283,14 @@ impl Room {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize, Debug, PartialEq)]
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum GameState {
+    #[default]
     Start,
     Selection,
     QuestionReading,
     Answer,
     WaitingForBuzz,
     GameEnd,
-}
-
-impl Default for GameState {
-    fn default() -> Self {
-        Self::Start
-    }
 }

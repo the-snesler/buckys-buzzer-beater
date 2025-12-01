@@ -14,6 +14,7 @@ impl fmt::Debug for HostEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HostEntry")
             .field("pid", &self.pid)
+            .field("sender len", &self.sender.len())
             .finish()
     }
 }
@@ -22,14 +23,4 @@ impl HostEntry {
     pub fn new(pid: u32, sender: Sender<WsMsg>) -> Self {
         Self { pid, sender }
     }
-
-    pub async fn update(&self, msg: WsMsg) -> Result<(), ChannelError> {
-        self.sender.send(msg).await?;
-        Ok(())
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Host {
-    pub pid: PlayerId,
 }

@@ -1,15 +1,24 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use crate::{game::{Category, GameState}, player::{Player, PlayerId}, HeartbeatId, UnixMs};
+use crate::{
+    HeartbeatId, UnixMs,
+    game::{Category, GameState},
+    player::{Player, PlayerId},
+};
 
 pub type WsMsgChannel = (Sender<WsMsg>, Receiver<WsMsg>);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum WsMsg {
-    Witness { msg: Box<WsMsg> },
+    Witness {
+        msg: Box<WsMsg>,
+    },
     PlayerList(Vec<Player>),
-    NewPlayer { pid: PlayerId, token: String },
+    NewPlayer {
+        pid: PlayerId,
+        token: String,
+    },
 
     // Game State Broadcast
     GameState {
@@ -43,7 +52,9 @@ pub enum WsMsg {
     },
     #[serde(alias = "HostReady")]
     HostReady {},
-    HostChecked { correct: bool },
+    HostChecked {
+        correct: bool,
+    },
 
     // Buzzer
     #[serde(alias = "BuzzEnable")]
@@ -52,11 +63,25 @@ pub enum WsMsg {
     BuzzDisable {},
     #[serde(alias = "Buzz")]
     Buzz {},
-    Buzzed { pid: PlayerId, name: String },
+    Buzzed {
+        pid: PlayerId,
+        name: String,
+    },
 
     // Heartbeats
-    DoHeartbeat { hbid: HeartbeatId, t_sent: UnixMs },
-    Heartbeat { hbid: HeartbeatId, t_dohb_recv: UnixMs },
-    GotHeartbeat { hbid: HeartbeatId },
-    LatencyOfHeartbeat { hbid: HeartbeatId, t_lat: UnixMs },
+    DoHeartbeat {
+        hbid: HeartbeatId,
+        t_sent: UnixMs,
+    },
+    Heartbeat {
+        hbid: HeartbeatId,
+        t_dohb_recv: UnixMs,
+    },
+    GotHeartbeat {
+        hbid: HeartbeatId,
+    },
+    LatencyOfHeartbeat {
+        hbid: HeartbeatId,
+        t_lat: UnixMs,
+    },
 }
