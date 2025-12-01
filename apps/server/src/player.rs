@@ -4,13 +4,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio_mpmc::{ChannelError, Sender};
+use tokio_mpmc::Sender;
 
-use crate::{
-    ConnectionStatus, HeartbeatId, UnixMs,
-    ws_msg::{WsMsg, WsMsgChannel},
-};
+use crate::{ConnectionStatus, HeartbeatId, UnixMs, ws_msg::WsMsg};
 
 pub type PlayerId = u32;
 
@@ -44,6 +42,9 @@ impl fmt::Debug for PlayerEntry {
             .field("player", &self.player)
             .field("status", &self.status)
             .field("latencies", &self.latencies)
+            .field("sender len", &self.sender.len())
+            .field("times_doheartbeat", &self.times_doheartbeat)
+            .field("hbid_counter", &self.hbid_counter)
             .finish()
     }
 }
@@ -59,21 +60,13 @@ impl PlayerEntry {
             hbid_counter: 0,
         }
     }
-
-    pub fn did_buzz(&self) -> bool {
-        self.player.buzzed
-    }
-
-    pub async fn update(&self, msg: &WsMsg) -> Result<(), ChannelError> {
-        self.sender.send(msg.clone()).await?;
-        Ok(())
-    }
 }
 
 impl PlayerEntry {
-    pub fn latency(&self) -> u32 {
+    pub fn latency(&self) -> Result<u32> {
         let sum: u32 = self.latencies.iter().sum();
-        sum / (self.latencies.len() as u32)
+        let latencies_len: u32 = self.latencies.len().try_into()?;
+        Ok(sum / latencies_len)
     }
 
     pub fn time_ms() -> u64 {
@@ -108,11 +101,7 @@ impl PlayerEntry {
         if let Some(dohb) = self.times_doheartbeat.get(&hbid) {
             if let Some(lat_fwd) = dohb.delta_32bit() {
                 println!("t_lathb={t_lathb},lat_fwd={lat_fwd}");
-                let lat = if (t_lathb > lat_fwd) {
-                    t_lathb - lat_fwd
-                } else {
-                    0
-                };
+                let lat = t_lathb.saturating_sub(lat_fwd);
                 for i in 1..(self.latencies.len() - 1) {
                     self.latencies[i - 1] = self.latencies[i];
                 }
@@ -148,13 +137,7 @@ impl PlayerEntry {
 
 impl TrackedMessageTime {
     pub fn delta(&self) -> Option<u64> {
-        self.t_recv.map(|x| {
-            if (x > self.t_sent) {
-                x - self.t_sent
-            } else {
-                0
-            }
-        })
+        self.t_recv.map(|x| x.saturating_sub(self.t_sent))
     }
 
     pub fn delta_32bit(&self) -> Option<u32> {

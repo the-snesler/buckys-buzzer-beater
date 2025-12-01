@@ -1,16 +1,15 @@
-use std::{collections::HashMap, sync::Arc, thread, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use anyhow::anyhow;
+use anyhow::{Result, anyhow};
 use axum::{
     Json, Router,
     extract::{
         Path, Query, State,
         ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     },
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{any, get, post},
 };
-use axum_macros::debug_handler;
 use tower_http::services::{ServeDir, ServeFile};
 
 use futures::{FutureExt, select};
@@ -24,12 +23,11 @@ use tokio_mpmc::channel;
 use crate::{
     game::{GameState, Room},
     host::HostEntry,
-    player::*,
+    player::{Player, PlayerEntry},
     ws_msg::WsMsg,
 };
 
 mod game;
-mod game_file;
 mod host;
 mod player;
 mod ws_msg;
@@ -125,7 +123,6 @@ async fn create_room(
 #[derive(Debug)]
 enum ConnectionStatus {
     Connected,
-    Disconnected,
 }
 #[derive(Serialize, Deserialize)]
 struct RoomParams {
@@ -157,8 +154,8 @@ async fn ws_upgrade_handler(
             rp,
             state,
             WsQuery {
-                token,
                 player_name,
+                token,
                 player_id,
             },
         )
@@ -247,7 +244,7 @@ async fn ws_socket_handler(
                 send_player_list_to_host(host, &room.players).await?;
             }
         } else if let Some(name) = player_name {
-            let new_id: u32 = (room.players.len() + 1).try_into().unwrap();
+            let new_id = (room.players.len() + 1).try_into()?;
             connection_player_id = Some(new_id);
             let player_token = generate_player_token();
             let player = PlayerEntry::new(
@@ -335,23 +332,22 @@ async fn ws_socket_handler(
                             .get_mut(&code)
                             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
                         for player in &room.players {
-                            let cpid = player.player.pid.clone();
+                            let cpid = player.player.pid;
                             let csender = player.sender.clone();
-                            let lat: u64 = player.latency().into();
+                            let lat: u64 = player.latency()?.into();
                             let witnessc = witness.clone();
-                            let latc = lat.clone();
+                            let latc = lat;
                             tokio::spawn(async move {
-                                if let Some(id) = connection_player_id {
-                                    if cpid == id {
+                                if let Some(id) = connection_player_id
+                                    && cpid == id {
                                         return Ok(());
                                     }
-                                }
                                 let s = csender;
                                 tokio::time::sleep(Duration::from_millis(500 - latc)).await;
                                 s.send(witnessc).await
                             });
                         }
-                    };
+                    }
                     // heartbeat case
                     if let WsMsg::Heartbeat { hbid, .. } = msg.clone() {
                         tx_internal.send(WsMsg::GotHeartbeat { hbid }).await?;
@@ -415,7 +411,7 @@ const HOST: &str = "0.0.0.0";
 const PORT: u16 = 3000;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let state = Arc::new(AppState::new());
 
     let room_routes = Router::new()
@@ -433,11 +429,12 @@ async fn main() {
             ServeDir::new("public").not_found_service(ServeFile::new("public/index.html")),
         );
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", HOST, PORT))
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", HOST, PORT)).await?;
     println!("Server running on http://{}:{}", HOST, PORT);
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .await
+        .expect("Failed to start server");
+    Ok(())
 }
 
 type HeartbeatId = u32;
