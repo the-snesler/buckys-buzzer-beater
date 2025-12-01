@@ -14,7 +14,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  RUSTFLAGS: -D warnings
 
 jobs:
   format:
@@ -48,7 +47,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/server
-      - run: |
+      - name: Run Clippy
+        run: |
           cargo clippy --all-targets --all-features -- \
             -D warnings \
             -D clippy::todo \
@@ -83,4 +83,7 @@ jobs:
         - uses: Swatinem/rust-cache@v2
           with:
             workspaces: apps/server
-        - run: cargo build --release --all-features
+        - name: Build
+          env:
+            RUSTFLAGS: -D warnings
+          run: cargo build --release --all-features
