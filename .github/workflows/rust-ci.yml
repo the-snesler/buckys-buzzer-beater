@@ -1,0 +1,89 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'apps/server/**'
+      - '.github/workflows/rust-ci.yml'
+  pull_request:
+    paths:
+      - 'apps/server/**'
+      - '.github/workflows/rust-ci.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/server
+      - name: Run Clippy
+        run: |
+          cargo clippy --all-targets --all-features -- \
+            -D warnings \
+            -D clippy::todo \
+            -D clippy::unimplemented \
+            -W clippy::pedantic \
+            -D clippy::unwrap_used
+
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/server
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: apps/server
+    - run: cargo test --all-features
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/server
+    steps:
+        - uses: actions/checkout@v4
+        - uses: dtolnay/rust-toolchain@stable
+        - uses: Swatinem/rust-cache@v2
+          with:
+            workspaces: apps/server
+        - name: Build
+          env:
+            RUSTFLAGS: -D warnings
+          run: cargo build --release --all-features
