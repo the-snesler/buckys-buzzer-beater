@@ -29,7 +29,6 @@ use crate::{
 };
 
 mod game;
-mod game_file;
 mod host;
 mod player;
 mod ws_msg;
