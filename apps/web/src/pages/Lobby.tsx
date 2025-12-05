@@ -130,86 +130,184 @@ export default function Lobby() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-900">
-      <div className="bg-gray-800 p-8 rounded-lg shadow-xl w-lg">
-        <h1 className="text-3xl font-bold text-white text-center mb-8">
-          Bucky's Buzzer Beater
-        </h1>
+    <div className="min-h-screen py-24 flex flex-col items-center justify-center fancy-bg relative overflow-hidden">
+      {/* Animated background elements */}
+      <div className="absolute inset-0 opacity-10">
+        <div className="absolute top-20 left-20 w-96 h-96 bg-white rounded-full blur-3xl animate-pulse"></div>
+        <div
+          className="absolute bottom-20 right-20 w-96 h-96 bg-red-400 rounded-full blur-3xl animate-pulse"
+          style={{ animationDelay: "1s" }}
+        ></div>
+      </div>
 
-        <form onSubmit={handleJoin} className="mb-6">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-gray-300 mb-2">Code</label>
-              <input
-                type="text"
-                value={roomCode}
-                onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                maxLength={6}
-                placeholder="67ABCD"
-                className="w-full px-4 py-3 rounded bg-gray-700 text-white text-center text-2xl tracking-widest uppercase mb-4"
-              />
-            </div>
-            <div>
-              <label className="block text-gray-300 mb-2">Name</label>
-              <input
-                type="text"
-                value={playerName}
-                onChange={(e) => setPlayerName(e.target.value)}
-                placeholder="Your Name"
-                className="w-full px-4 py-3 rounded bg-gray-700 text-white text-center text-2xl"
-              />
-            </div>
+      <div className="relative z-10 w-full max-w-2xl px-6">
+        {/* Icon and Title Section */}
+        <div className="text-center mb-12">
+          <div className="flex items-center justify-center gap-8 mb-6">
+            <img
+              src="/bucky.svg"
+              alt="Bucky"
+              className="w-20 h-20 opacity-80 hover:scale-125 transition-transform duration-300"
+            />
+            <img
+              src="/apple-touch-icon.png"
+              alt="Bucky's Buzzer"
+              className="w-32 h-32 drop-shadow-2xl hover:scale-110 hover:rotate-3 transition-transform rounded-xl border-t border-1 border-red-600 duration-300"
+            />
+            <img
+              src="/bucky.svg"
+              alt="Bucky"
+              className="w-20 h-20 opacity-80 hover:scale-125 transition-transform duration-300"
+              style={{ transform: "scaleX(-1)" }}
+            />
           </div>
-          <button
-            type="submit"
-            disabled={roomCode.length !== 6 || !playerName.trim()}
-            className="w-full mt-4 px-4 py-3 bg-red-600 text-white rounded font-semibold hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          <h1
+            className="text-6xl font-black text-white mb-3 tracking-tight"
+            style={{
+              fontFamily: 'Impact, "Arial Black", sans-serif',
+              textShadow: "4px 4px 0px rgba(0,0,0,0.3)",
+            }}
           >
-            Join Game
-          </button>
-        </form>
+            BUCKY'S
+          </h1>
+          <h2
+            className="text-5xl font-black text-red-200 tracking-wide"
+            style={{
+              fontFamily: 'Impact, "Arial Black", sans-serif',
+              textShadow: "3px 3px 0px rgba(0,0,0,0.3)",
+            }}
+          >
+            BUZZER BEATER
+          </h2>
+          <div className="h-1 w-32 bg-white mx-auto mt-4 rounded-full"></div>
+        </div>
 
-        <div className="border-t border-gray-700 pt-6">
-          <div className="flex items-center justify-between mb-2">
-            <label className="block text-gray-300">Game File</label>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={loadDefaultGame}
-                className="text-blue-400 hover:text-blue-300 text-sm"
-              >
-                Default game
-              </button>
-              <Link
-                to="/create"
-                className="text-blue-400 hover:text-blue-300 text-sm"
-              >
-                or create your own
-              </Link>
+        {/* Join Game Card */}
+        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-8 mb-6 border-4 border-red-700 transform hover:scale-[1.02] transition-transform">
+          <h3
+            className="text-2xl font-black text-red-900 mb-6 tracking-wide"
+            style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}
+          >
+            JOIN A GAME
+          </h3>
+          <form onSubmit={handleJoin}>
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <div>
+                <label className="block text-red-900 font-bold mb-2 text-sm uppercase tracking-wider">
+                  Room Code
+                </label>
+                <input
+                  type="text"
+                  value={roomCode}
+                  onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                  maxLength={6}
+                  placeholder="ABC123"
+                  className="w-full px-4 py-4 rounded-xl bg-stone-100 text-red-900 text-center text-3xl font-black tracking-widest uppercase border-3 border-stone-300 focus:border-red-500 focus:outline-none focus:ring-4 focus:ring-red-200 transition-all"
+                  style={{ fontFamily: 'Consolas, "Courier New", monospace' }}
+                />
+              </div>
+              <div>
+                <label className="block text-red-900 font-bold mb-2 text-sm uppercase tracking-wider">
+                  Your Name
+                </label>
+                <input
+                  type="text"
+                  value={playerName}
+                  onChange={(e) => setPlayerName(e.target.value)}
+                  placeholder="Player Name"
+                  className="w-full px-4 py-4 rounded-xl bg-stone-100 text-red-900 text-center text-2xl font-bold border-3 border-stone-300 focus:border-red-500 focus:outline-none focus:ring-4 focus:ring-red-200 transition-all"
+                />
+              </div>
             </div>
+            <button
+              type="submit"
+              disabled={roomCode.length !== 6 || !playerName.trim()}
+              className="w-full py-5 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl font-black text-xl uppercase tracking-wider shadow-lg hover:shadow-2xl hover:from-red-700 hover:to-red-800 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105 transition-all duration-200 border-b-4 border-red-900 active:border-b-0 active:mt-1 flex items-center justify-center gap-3"
+              style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}
+            >
+              <img src="/buzzer.svg" alt="" className="w-6 h-6 opacity-90" />
+              Join Game
+            </button>
+          </form>
+        </div>
+
+        {/* Host Game Card */}
+        <div className="bg-stone-900/90 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border-4 border-stone-700 transform hover:scale-[1.02] transition-transform">
+          <h3
+            className="text-2xl font-black text-white mb-6 tracking-wide"
+            style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}
+          >
+            HOST A GAME
+          </h3>
+
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <label className="text-white font-bold text-sm uppercase tracking-wider">
+                Choose Game
+              </label>
+              <div className="flex gap-3 text-sm">
+                <button
+                  type="button"
+                  onClick={loadDefaultGame}
+                  className="text-red-300 hover:text-red-200 font-semibold underline decoration-2 underline-offset-2 transition-colors"
+                >
+                  Load Default
+                </button>
+                <span className="text-stone-500">•</span>
+                <Link
+                  to="/create"
+                  className="text-red-300 hover:text-red-200 font-semibold underline decoration-2 underline-offset-2 transition-colors"
+                >
+                  Create Custom
+                </Link>
+              </div>
+            </div>
+
+            <input
+              type="file"
+              accept=".json"
+              onChange={handleFileUpload}
+              className="w-full px-4 py-4 rounded-xl bg-stone-800 text-white border-2 border-stone-600 focus:border-red-400 focus:outline-none transition-all file:mr-4 file:py-2 file:px-6 file:rounded-lg file:border-0 file:bg-red-600 file:text-white file:font-bold file:cursor-pointer file:hover:bg-red-700 file:transition-colors"
+            />
+
+            {categories && (
+              <div className="mt-3 flex items-center gap-2 text-green-300 bg-green-900/30 border-2 border-green-700 rounded-lg px-4 py-3">
+                <span className="text-xl">✓</span>
+                <p className="font-semibold">
+                  Loaded {categories.length} categories from{" "}
+                  <span className="font-black">
+                    {fromBuilder ? "Game Builder" : fileName}
+                  </span>
+                </p>
+              </div>
+            )}
           </div>
-          <input
-            type="file"
-            accept=".json"
-            onChange={handleFileUpload}
-            className="w-full px-4 py-3 rounded bg-gray-700 text-white mb-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-gray-600 file:text-white file:cursor-pointer"
-          />
-          {categories && (
-            <p className="text-green-400 text-sm mb-2">
-              Loaded {categories.length} categories from{" "}
-              {fromBuilder ? "Game Builder" : fileName}
-            </p>
-          )}
+
           <button
             onClick={handleCreate}
             disabled={isCreating || !categories}
-            className="w-full px-4 py-3 bg-green-600 text-white rounded font-semibold hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-5 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-xl font-black text-xl uppercase tracking-wider shadow-lg hover:shadow-2xl hover:from-green-700 hover:to-green-800 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 transform hover:scale-105 transition-all duration-200 border-b-4 border-green-900 active:border-b-0 active:mt-1 flex items-center justify-center gap-3"
+            style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}
           >
-            {isCreating ? "Creating..." : "Create Room"}
+            {isCreating ? (
+              <>
+                <span className="inline-block animate-spin">⏳</span>
+                Creating Room...
+              </>
+            ) : (
+              <>
+                <img src="/buzzer.svg" alt="" className="w-7 h-7 opacity-90" />
+                Create Room
+              </>
+            )}
           </button>
         </div>
 
-        {error && <p className="mt-4 text-red-400 text-center">{error}</p>}
+        {error && (
+          <div className="mt-6 bg-red-600/90 backdrop-blur-sm border-4 border-red-800 rounded-xl px-6 py-4 text-center">
+            <p className="text-white font-bold text-lg">⚠️ {error}</p>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -5,3 +5,16 @@
 html {
   overscroll-behavior: none;
 }
+
+/* bg-gradient-to-br from-red-900 via-red-800 to-stone-900 */
+.fancy-bg {
+  background: 
+    radial-gradient(#8768681f 5px,transparent 0),radial-gradient(#8768681f 5px,transparent 0),
+    linear-gradient(135deg, 
+      #7f1d1d 0%, 
+      #991b1b 50%, 
+      #1c1917 100%
+    );
+  background-size: 30px 30px,30px 30px, auto;
+  background-position: 0 0,calc(15px) calc(15px),0 0;
+}
