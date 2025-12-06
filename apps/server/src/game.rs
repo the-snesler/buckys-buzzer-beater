@@ -56,6 +56,12 @@ pub struct RoomResponse {
     pub messages_to_specific: Vec<(PlayerId, WsMsg)>,
 }
 
+impl Default for RoomResponse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RoomResponse {
     pub fn new() -> Self {
         Self {
@@ -191,22 +197,20 @@ impl Room {
             WsMsg::HostChecked { correct } => self.handle_host_checked(*correct),
 
             WsMsg::Heartbeat { hbid, t_dohb_recv } => {
-                if let Some(sender_id) = sender_id {
-                    if let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
-                    {
-                        entry.on_know_dohb_recv(*hbid, *t_dohb_recv);
-                    }
+                if let Some(sender_id) = sender_id
+                    && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
+                {
+                    entry.on_know_dohb_recv(*hbid, *t_dohb_recv);
                 }
                 RoomResponse::new()
             }
 
             WsMsg::LatencyOfHeartbeat { hbid, t_lat } => {
-                if let Some(sender_id) = sender_id {
-                    if let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
-                    {
-                        let t_lat_u32 = (*t_lat).try_into().unwrap_or(u32::MAX);
-                        entry.on_latencyhb(*hbid, t_lat_u32);
-                    }
+                if let Some(sender_id) = sender_id
+                    && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
+                {
+                    let t_lat_u32 = (*t_lat).try_into().unwrap_or(u32::MAX);
+                    entry.on_latencyhb(*hbid, t_lat_u32);
                 }
                 RoomResponse::new()
             }
@@ -250,13 +254,13 @@ impl Room {
             return RoomResponse::new();
         };
 
-        if let Some(buzzer_id) = self.current_buzzer {
-            if let Some(player) = self.players.iter_mut().find(|p| p.player.pid == buzzer_id) {
-                if correct {
-                    player.player.score += question_value;
-                } else {
-                    player.player.score -= question_value;
-                }
+        if let Some(buzzer_id) = self.current_buzzer
+            && let Some(player) = self.players.iter_mut().find(|p| p.player.pid == buzzer_id)
+        {
+            if correct {
+                player.player.score += question_value;
+            } else {
+                player.player.score -= question_value;
             }
         }
 
@@ -559,7 +563,9 @@ mod tests {
             let mut room = create_test_room();
             (tc.setup)(&mut room);
 
-            let (cat_idx, q_idx) = room.current_question.unwrap();
+            let (cat_idx, q_idx) = room
+                .current_question
+                .expect("Failed to get current question");
 
             room.handle_message(
                 &WsMsg::HostChecked {

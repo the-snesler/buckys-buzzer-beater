@@ -6,7 +6,15 @@ pub mod ws_msg;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::anyhow;
-use axum::{extract::{ws::{Message, Utf8Bytes, WebSocket}, Path, Query, State, WebSocketUpgrade}, response::Response, routing::{any, get, post}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::{
+        Path, Query, State, WebSocketUpgrade,
+        ws::{Message, Utf8Bytes, WebSocket},
+    },
+    response::Response,
+    routing::{any, get, post},
+};
 pub use game::{GameState, Room};
 pub use host::HostEntry;
 use http::StatusCode;
@@ -21,9 +29,8 @@ use futures::{FutureExt, select};
 
 use crate::ws_msg::WsMsg;
 
-
 pub type HeartbeatId = u32;
-pub type UnixMs = u64;  // # of milliseconds since unix epoch, or delta thereof
+pub type UnixMs = u64; // # of milliseconds since unix epoch, or delta thereof
 
 #[derive(Deserialize)]
 struct WsQuery {
@@ -36,6 +43,12 @@ struct WsQuery {
 
 pub struct AppState {
     pub room_map: Mutex<HashMap<String, Room>>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppState {
@@ -343,17 +356,16 @@ async fn ws_socket_handler(
                             .get_mut(&code)
                             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
                         for player in &room.players {
-                            let cpid = player.player.pid.clone();
+                            let cpid = player.player.pid;
                             let csender = player.sender.clone();
                             let lat: u64 = player.latency()?.into();
                             let witnessc = witness.clone();
-                            let latc = lat.clone();
+                            let latc = lat;
                             tokio::spawn(async move {
-                                if let Some(id) = connection_player_id {
-                                    if cpid == id {
+                                if let Some(id) = connection_player_id
+                                    && cpid == id {
                                         return Ok(());
                                     }
-                                }
                                 let s = csender;
                                 tokio::time::sleep(Duration::from_millis(500 - latc)).await;
                                 s.send(witnessc).await
@@ -418,4 +430,3 @@ async fn cpr_handler(
         }
     }
 }
-
