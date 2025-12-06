@@ -11,9 +11,10 @@ use crate::{
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Question {
-    pub text: String,
+    pub question: String,
     pub answer: String,
     pub value: u32,
+    #[serde(default)]
     pub answered: bool,
 }
 
@@ -339,7 +340,7 @@ mod tests {
         let mut room = Room::new("TEST".to_string(), "token".to_string());
 
         room.categories = vec![Category {
-            name: "Test Category".to_string(),
+            title: "Test Category".to_string(),
             questions: vec![
                 Question {
                     question: "What is 2+2?".to_string(),

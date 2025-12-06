@@ -156,7 +156,7 @@ pub async fn add_room_categories(state: &AppState, room_code: &str) {
         0,
         Category {
             questions: questions,
-            name: "Category 1".to_string(),
+            title: "Category 1".to_string(),
         },
     );
 }
