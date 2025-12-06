@@ -5,11 +5,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use common::*;
-use madhacks2025::{
-    GameState, PlayerEntry,
-    game::{Category, Question},
-    ws_msg::WsMsg,
-};
+use madhacks2025::{GameState, PlayerEntry, ws_msg::WsMsg};
 
 mod smoke_tests {
     use super::*;
@@ -50,7 +46,11 @@ mod smoke_tests {
 
         let host_token = {
             let room_map = state.room_map.lock().await;
-            room_map.get(&room_code).unwrap().host_token.clone()
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
         };
 
         let mut host_ws =
@@ -74,7 +74,11 @@ async fn test_player_joins_room() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could now find room")
+            .host_token
+            .clone()
     };
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial_msgs = recv_msgs(&mut host_ws).await;
@@ -95,7 +99,7 @@ async fn test_player_joins_room() {
     }
 
     let room_map = state.room_map.lock().await;
-    let room = room_map.get(&room_code).unwrap();
+    let room = room_map.get(&room_code).expect("Could not find room");
     assert_eq!(room.players.len(), 1, "Room should have 1 player in state");
 }
 
@@ -106,7 +110,11 @@ async fn test_multiple_players_join() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room")
+            .host_token
+            .clone()
     };
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
@@ -134,7 +142,7 @@ async fn test_multiple_players_join() {
     }
 
     let room_map = state.room_map.lock().await;
-    let room = room_map.get(&room_code).unwrap();
+    let room = room_map.get(&room_code).expect("Could not find room");
     assert_eq!(room.players.len(), 3);
 }
 
@@ -145,7 +153,11 @@ async fn test_game_flow_start_to_buzz() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room")
+            .host_token
+            .clone()
     };
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
@@ -187,7 +199,7 @@ async fn test_game_flow_start_to_buzz() {
     }
 
     let room_map = state.room_map.lock().await;
-    let room = room_map.get(&room_code).unwrap();
+    let room = room_map.get(&room_code).expect("Could not find room");
     assert!(matches!(room.state, GameState::Answer));
 }
 
@@ -198,18 +210,22 @@ async fn test_player_reconnect() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room")
+            .host_token
+            .clone()
     };
     let mut _host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
 
-    let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+    let (player_ws, player_id) = add_player(port, &room_code, "AJ").await;
     let player_token = {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not find room");
         room.players
             .iter()
             .find(|p| p.player.pid == player_id)
-            .unwrap()
+            .expect("Could not find player")
             .player
             .token
             .clone()
@@ -217,7 +233,7 @@ async fn test_player_reconnect() {
 
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not find room");
         assert_eq!(
             room.players.len(),
             1,
@@ -230,7 +246,7 @@ async fn test_player_reconnect() {
 
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not find room");
         assert_eq!(
             room.players.len(),
             1,
@@ -263,13 +279,13 @@ async fn test_player_reconnect() {
         .find(|m| matches!(m, WsMsg::PlayerState { .. }))
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not find room ");
         let player = room
             .players
             .iter()
             .find(|p| &p.player.pid == pid)
             .map(|p| &p.player)
-            .unwrap();
+            .expect("Could not find player");
         assert_eq!(
             player.pid, player_id,
             "Reconnected player should have same ID"
@@ -282,7 +298,7 @@ async fn test_player_reconnect() {
 
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not find room");
         assert_eq!(
             room.players.len(),
             1,
@@ -299,7 +315,11 @@ async fn test_correct_answer_gives_points() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room")
+            .host_token
+            .clone()
     };
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
@@ -315,7 +335,7 @@ async fn test_correct_answer_gives_points() {
     let score = get_player_score(&room_map, &room_code, player_id);
     assert_eq!(score, 100, "Score should be 100 after correct answer");
 
-    let room = room_map.get(&room_code).unwrap();
+    let room = room_map.get(&room_code).expect("Could not find room");
     assert!(matches!(room.state, GameState::Selection));
 }
 
@@ -327,7 +347,11 @@ async fn test_incorrect_answer_deducts_points() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room code")
+            .host_token
+            .clone()
     };
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
@@ -343,7 +367,7 @@ async fn test_incorrect_answer_deducts_points() {
     let score = get_player_score(&room_map, &room_code, player_id);
     assert_eq!(score, -100, "Score should be -100 after correct answer");
 
-    let room = room_map.get(&room_code).unwrap();
+    let room = room_map.get(&room_code).expect("Could not find room");
     assert!(matches!(room.state, GameState::Selection));
 }
 
@@ -354,7 +378,11 @@ async fn test_host_reconnect() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room")
+            .host_token
+            .clone()
     };
 
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
@@ -377,7 +405,7 @@ async fn test_host_reconnect() {
 
     let state_before = {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not find room");
         room.state.clone()
     };
     assert!(matches!(state_before, GameState::QuestionReading));
@@ -437,7 +465,11 @@ async fn test_full_game() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room")
+            .host_token
+            .clone()
     };
 
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
@@ -480,7 +512,7 @@ async fn test_full_game() {
 
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not find room");
         assert_eq!(
             get_player_score(&room_map, &room_code, aj_id),
             600,
@@ -503,7 +535,11 @@ async fn test_concurrent_buzzes() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room")
+            .host_token
+            .clone()
     };
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
@@ -548,8 +584,8 @@ async fn test_concurrent_buzzes() {
         }
     });
 
-    let mut aj_ws = aj_buzz.await.unwrap();
-    let mut sam_ws = sam_buzz.await.unwrap();
+    let _aj_ws = aj_buzz.await.expect("Could not find AJ websocket");
+    let _sam_ws = sam_buzz.await.expect("Could not find Sam websocket");
 
     let host_msgs = recv_msgs(&mut host_ws).await;
     let buzz_count = host_msgs
@@ -576,7 +612,7 @@ async fn test_concurrent_buzzes() {
 
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not find room");
         assert_eq!(
             room.current_buzzer,
             Some(buzzed_player),
@@ -587,7 +623,7 @@ async fn test_concurrent_buzzes() {
             .players
             .iter()
             .find(|p| p.player.pid == buzzed_player)
-            .unwrap();
+            .expect("Could not find buzzed player");
         assert!(buzzer.player.buzzed, "Buzzer should be marked as buzzed");
     }
 }
@@ -599,7 +635,11 @@ async fn test_concurrent_player_joins() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room")
+            .host_token
+            .clone()
     };
     let mut host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let _initial = recv_msgs(&mut host_ws).await;
@@ -616,7 +656,7 @@ async fn test_concurrent_player_joins() {
 
     let mut player_ids = vec![];
     for handle in join_handles {
-        let (_ws, id) = handle.await.unwrap();
+        let (_ws, id) = handle.await.expect("Could not find ws handle");
         player_ids.push(id);
     }
 
@@ -624,7 +664,7 @@ async fn test_concurrent_player_joins() {
 
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not find room");
         assert_eq!(room.players.len(), 5, "Should have 5 players");
     }
 
@@ -658,7 +698,11 @@ async fn test_heartbeat_roundtrip() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not find room")
+            .host_token
+            .clone()
     };
     let mut _host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
     let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
@@ -678,7 +722,7 @@ async fn test_heartbeat_roundtrip() {
 
     assert!(do_heartbeat.is_some(), "Player should receive DoHeartbeat");
 
-    let (hbid, t_sent) = do_heartbeat.unwrap();
+    let (hbid, t_sent) = do_heartbeat.expect("Could not do heartbeat");
 
     let t_dohb_recv = PlayerEntry::time_ms();
     let got_msgs =
@@ -696,14 +740,14 @@ async fn test_heartbeat_roundtrip() {
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not get room");
         let player = room
             .players
             .iter()
             .find(|p| p.player.pid == player_id)
-            .unwrap();
+            .expect("Could not find player");
 
-        let latency = player.latency().unwrap();
+        let latency = player.latency().expect("Could not get latency");
         assert!(latency > 0, "Latency should be recorded");
     }
 }
@@ -715,7 +759,11 @@ async fn test_heartbeat_with_invalid_hbid() {
 
     let host_token = {
         let room_map = state.room_map.lock().await;
-        room_map.get(&room_code).unwrap().host_token.clone()
+        room_map
+            .get(&room_code)
+            .expect("Could not get room")
+            .host_token
+            .clone()
     };
     let mut _host_ws = connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
 
@@ -745,14 +793,14 @@ async fn test_heartbeat_with_invalid_hbid() {
     // Latency should remain 0
     {
         let room_map = state.room_map.lock().await;
-        let room = room_map.get(&room_code).unwrap();
+        let room = room_map.get(&room_code).expect("Could not get room");
         let player = room
             .players
             .iter()
             .find(|p| p.player.pid == player_id)
-            .unwrap();
+            .expect("Could not find player");
         assert_eq!(
-            player.latency().unwrap(),
+            player.latency().expect("Could not get latency"),
             0,
             "Latency should remain 0 with invalid hbid"
         );

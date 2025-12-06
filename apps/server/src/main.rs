@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use madhacks2025::{build_app, AppState};
+use madhacks2025::{AppState, build_app};
 
 const HOST: &str = "0.0.0.0";
 const PORT: u16 = 3000;

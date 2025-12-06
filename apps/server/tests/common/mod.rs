@@ -141,7 +141,7 @@ pub async fn add_room_categories(state: &AppState, room_code: &str) {
     let mut room_map = state.room_map.lock().await;
     let room = room_map
         .get_mut(room_code)
-        .expect(format!("Failed to get room with code: {}", room_code).as_str());
+        .unwrap_or_else(|| panic!("Failed to get room with code: {}", room_code));
 
     let questions: Vec<Question> = (0..=2)
         .map(|i| Question {
@@ -155,7 +155,7 @@ pub async fn add_room_categories(state: &AppState, room_code: &str) {
     room.categories.insert(
         0,
         Category {
-            questions: questions,
+            questions,
             title: "Category 1".to_string(),
         },
     );
@@ -216,11 +216,11 @@ pub fn get_player_score(
     room_code: &str,
     player_id: u32,
 ) -> i32 {
-    let room = room_map.get(room_code).unwrap();
+    let room = room_map.get(room_code).expect("Could not find room");
     room.players
         .iter()
         .find(|p| p.player.pid == player_id)
-        .unwrap()
+        .expect("Could not find player")
         .player
         .score
 }
@@ -230,6 +230,6 @@ pub async fn start_game(host_ws: &mut WsStream, player_ws_list: &mut [&mut WsStr
     send_msg_and_recv_all(host_ws, &WsMsg::StartGame {}).await;
 
     for player_ws in player_ws_list {
-        let _ = recv_msgs(*player_ws).await;
+        let _ = recv_msgs(player_ws).await;
     }
 }
