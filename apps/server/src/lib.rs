@@ -3,7 +3,11 @@ pub mod host;
 pub mod player;
 pub mod ws_msg;
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::anyhow;
 use axum::{
@@ -43,6 +47,7 @@ struct WsQuery {
 
 pub struct AppState {
     pub room_map: Mutex<HashMap<String, Room>>,
+    pub room_ttl: Duration,
 }
 
 impl Default for AppState {
@@ -55,6 +60,14 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             room_map: Mutex::new(HashMap::new()),
+            room_ttl: Duration::from_secs(30 * 60),
+        }
+    }
+
+    pub fn with_ttl(ttl: Duration) -> Self {
+        Self {
+            room_map: Mutex::new(HashMap::new()),
+            room_ttl: ttl,
         }
     }
 }
@@ -383,6 +396,7 @@ async fn ws_socket_handler(
                         .get_mut(&code)
                         .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
                     room.update(&msg, connection_player_id).await?;
+                    room.touch();
                 }
             }
         }
@@ -429,4 +443,23 @@ async fn cpr_handler(
             format!("Err, {e}")
         }
     }
+}
+
+pub async fn cleanup_inactive_rooms(state: &Arc<AppState>) {
+    let mut room_map = state.room_map.lock().await;
+    let threshold = SystemTime::now()
+        .checked_sub(state.room_ttl)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    let rooms_to_remove: Vec<String> = room_map
+        .iter()
+        .filter(|(_, room)| room.last_activity < threshold)
+        .map(|(code, _)| code.clone())
+        .collect();
+
+    for code in &rooms_to_remove {
+        room_map.remove(code);
+    }
+
+    println!("Cleaned up {} rooms", rooms_to_remove.len());
 }
