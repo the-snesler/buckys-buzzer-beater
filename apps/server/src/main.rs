@@ -8,6 +8,15 @@ const PORT: u16 = 3000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "madhacks2025=debug,tower_http=debug".into()),
+        )
+        .init();
+
+    tracing::info!("Starting server on {}:{}", HOST, PORT);
+
     let state = Arc::new(AppState::new());
     let cleanup_state = state.clone();
     let app = build_app(state);
@@ -21,7 +30,7 @@ async fn main() -> Result<()> {
     });
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", HOST, PORT)).await?;
-    println!("Server running on http://{}:{}", HOST, PORT);
+    tracing::info!("Server running on http://{}:{}", HOST, PORT);
     axum::serve(listener, app)
         .await
         .expect("Failed to start server");
