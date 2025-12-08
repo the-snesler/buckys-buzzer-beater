@@ -145,6 +145,8 @@ async fn create_room(
 
     room_map.insert(code.clone(), room);
 
+    tracing::info!(room_code = %code, "Room created");
+
     (
         StatusCode::CREATED,
         Json(CreateRoomResponse {
@@ -206,7 +208,7 @@ async fn ws_upgrade_handler(
         {
             Ok(()) => {}
             Err(e) => {
-                println!("WebSocket handler failed (died but didn't panic): {e}");
+                tracing::error!(error = %e, "WebSocket handler failed");
             }
         }
     })
@@ -231,7 +233,13 @@ async fn ws_socket_handler(
     }: WsQuery,
 ) -> anyhow::Result<()> {
     // for debugging
-    println!("{:?} {:?} {:?} {:?}", code, token, player_name, player_id);
+    tracing::debug!(
+    room_code = %code,
+        ?token,
+        ?player_name,
+        ?player_id,
+        "WebSocket connection attempt"
+    );
     let ch: tokio_mpmc::Receiver<WsMsg>;
     let tx: tokio_mpmc::Sender<WsMsg>;
     (tx, ch) = channel(20);
@@ -242,13 +250,15 @@ async fn ws_socket_handler(
         let room = room_map
             .get_mut(&code)
             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-        println!("room: {:?}", room);
+        // println!("room: {:?}", room);
 
         let is_host = token.as_ref() == Some(&room.host_token);
 
         if is_host {
             let host = HostEntry::new(player_id.unwrap_or(0), tx.clone());
             send_player_list_to_host(&host, &room.players).await?;
+
+            tracing::info!(room_code = %code, "Host connected");
 
             if room.state != GameState::Start {
                 let players: Vec<Player> = room.players.iter().map(|e| e.player.clone()).collect();
@@ -261,6 +271,7 @@ async fn ws_socket_handler(
                     winner: None,
                 };
                 tx.send(game_state_msg).await?;
+                tracing::debug!(room_code = %code, state = ?room.state, "Sending game state to reconnecting host");
             }
 
             room.host = Some(host);
@@ -268,6 +279,8 @@ async fn ws_socket_handler(
             if let Some(existing) = room.players.iter_mut().find(|p| p.player.pid == id) {
                 // Update existing player's send channel
                 existing.sender = tx.clone();
+
+                tracing::info!(room_code = %code, player_id = id, "Player reconnected");
 
                 let can_buzz = room.state == GameState::WaitingForBuzz;
                 let player_state_msg = WsMsg::PlayerState {
@@ -292,10 +305,12 @@ async fn ws_socket_handler(
             connection_player_id = Some(new_id);
             let player_token = generate_player_token();
             let player = PlayerEntry::new(
-                Player::new(new_id, name, 0, false, player_token.clone()),
+                Player::new(new_id, name.clone(), 0, false, player_token.clone()),
                 tx.clone(),
             );
             room.players.push(player);
+
+            tracing::info!(room_code = %code, player_id = new_id, player_name = %name, "Player joined");
 
             let new_player_msg = WsMsg::NewPlayer {
                 pid: new_id,
@@ -329,10 +344,10 @@ async fn ws_socket_handler(
                 "Invalid connection: must provide player_name (new player) or token (reconnect)"
             ));
         }
-
-        for player in &room.players {
-            println!("player: {}", player.player.pid);
-        }
+        //
+        // for player in &room.players {
+        //     println!("player: {}", player.player.pid);
+        // }
     }
     loop {
         select! {
@@ -341,8 +356,8 @@ async fn ws_socket_handler(
                     let ser = serde_json::to_string(&recv)?;
                     if let Some(r) = &recv {
                         match &r {
-                            WsMsg::GameState { state, .. } => println!("sending GameState: {:?}", state),
-                            other => println!("sending {:?}", other),
+                            WsMsg::GameState { state, .. } => tracing::debug!(room_code = %code, ?state, "Sending GameState"),
+                            other => tracing::trace!(room_code = %code, "Sending message: {:?}", other),
                         }
                     }
                     ws.send(Message::Text(Utf8Bytes::from(ser))).await?;
@@ -412,6 +427,7 @@ async fn ws_socket_handler(
             }
         }
     }
+    tracing::info!(room_code = %code, ?connection_player_id, "WebSocket connection closed");
     Ok(())
 }
 
@@ -434,7 +450,11 @@ async fn cpr_handler(
                     match entry.heartbeat().await {
                         Ok(()) => {}
                         Err(e) => {
-                            println!("cpr_handler heartbeat failure, did not panic: {e}");
+                            tracing::warn!(
+                            player_id = entry.player.pid,
+                                error = %e,
+                                "Heartbeat failed"
+                            );
                             failures += 1;
                         }
                     }
@@ -468,9 +488,12 @@ pub async fn cleanup_inactive_rooms(state: &Arc<AppState>) {
         .map(|(code, _)| code.clone())
         .collect();
 
-    for code in &rooms_to_remove {
-        room_map.remove(code);
+    if rooms_to_remove.is_empty() {
+        tracing::trace!("No inactive rooms to clean up");
+    } else {
+        for code in &rooms_to_remove {
+            room_map.remove(code);
+        }
+        tracing::info!(count = rooms_to_remove.len(), "Cleaned up inactive rooms");
     }
-
-    println!("Cleaned up {} rooms", rooms_to_remove.len());
 }

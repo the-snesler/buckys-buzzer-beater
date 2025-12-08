@@ -130,6 +130,7 @@ impl Room {
     fn determine_winner(&mut self) {
         if self.players.is_empty() {
             self.winner = None;
+            tracing::debug!(room_code = %self.code, "No players, no winner");
             return;
         }
 
@@ -147,8 +148,22 @@ impl Room {
             .collect();
 
         self.winner = if winners.len() == 1 {
-            Some(winners[0].player.pid)
+            let winner_id = Some(winners[0].player.pid);
+            tracing::info!(
+                room_code = %self.code,
+                player_id = ?winner_id,
+                player_name = %winners[0].player.name,
+                score = max_score,
+                "Winner determined"
+            );
+            winner_id
         } else {
+            tracing::info!(
+                room_code = %self.code,
+                tie_count = winners.len(),
+                score = max_score,
+                "Game ended in a tie"
+            );
             None
         };
     }
@@ -181,6 +196,7 @@ impl Room {
     pub fn handle_message(&mut self, msg: &WsMsg, sender_id: Option<PlayerId>) -> RoomResponse {
         match msg {
             WsMsg::StartGame {} => {
+                tracing::info!(room_code = %self.code, "Game started");
                 self.state = GameState::Selection;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
@@ -190,6 +206,12 @@ impl Room {
                 category_index,
                 question_index,
             } => {
+                tracing::debug!(
+                    room_code = %self.code,
+                    category_index,
+                    question_index,
+                    "Host selected question"
+                );
                 self.current_question = Some((*category_index, *question_index));
                 self.current_buzzer = None;
                 for player in &mut self.players {
@@ -207,6 +229,12 @@ impl Room {
                         self.players.iter_mut().find(|p| p.player.pid == player_id)
                     && !player_entry.player.buzzed
                 {
+                    tracing::info!(
+                        room_code = %self.code,
+                        player_id,
+                        player_name = %player_entry.player.name,
+                        "Player buzzed in"
+                    );
                     player_entry.player.buzzed = true;
                     self.current_buzzer = Some(player_id);
                     self.state = GameState::Answer;
@@ -252,6 +280,7 @@ impl Room {
 
             WsMsg::EndGame {} => {
                 self.determine_winner();
+                tracing::info!(room_code = %self.code, ?self.winner, "Game ended");
                 self.state = GameState::GameEnd;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
@@ -332,6 +361,8 @@ impl Room {
     }
 
     pub async fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) -> anyhow::Result<()> {
+        tracing::trace!(room_code = %self.code, ?msg, ?pid, "Processing message");
+
         let response = self.handle_message(msg, pid);
 
         for msg in response.messages_to_host {

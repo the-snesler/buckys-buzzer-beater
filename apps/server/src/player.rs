@@ -102,6 +102,12 @@ impl PlayerEntry {
             if let Some(lat_fwd) = dohb.delta_32bit() {
                 println!("t_lathb={t_lathb},lat_fwd={lat_fwd}");
                 let lat = t_lathb.saturating_sub(lat_fwd);
+                tracing::trace!(
+                    player_id = self.player.pid,
+                    hbid,
+                    latency = lat,
+                    "Updated player latency"
+                );
                 for i in 1..(self.latencies.len() - 1) {
                     self.latencies[i - 1] = self.latencies[i];
                 }
@@ -109,7 +115,11 @@ impl PlayerEntry {
                 self.times_doheartbeat.clear();
                 true
             } else {
-                println!("WARN (PRE-WARN): DoHeartbeat had time sent but not received");
+                tracing::warn!(
+                    player_id = self.player.pid,
+                    hbid,
+                    "DoHeartbeat time sent but not received"
+                );
                 false
             }
         } else {
