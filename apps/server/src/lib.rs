@@ -16,7 +16,7 @@ use axum::{
         Path, Query, State, WebSocketUpgrade,
         ws::{Message, Utf8Bytes, WebSocket},
     },
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{any, get, post},
 };
 pub use game::{GameState, Room};
@@ -185,6 +185,12 @@ async fn ws_upgrade_handler(
         player_id,
     }): Query<WsQuery>,
 ) -> Response {
+    {
+        let room_map = state.room_map.lock().await;
+        if !room_map.contains_key(&rp.code) {
+            return (StatusCode::NOT_FOUND, "Room does not exist").into_response();
+        }
+    }
     ws_upgrade.on_upgrade(async move |ws| {
         match ws_socket_handler(
             ws,
