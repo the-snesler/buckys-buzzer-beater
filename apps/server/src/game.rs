@@ -34,6 +34,7 @@ pub struct Room {
     pub current_question: Option<(usize, usize)>, // (category_index, question_index)
     pub current_buzzer: Option<PlayerId>,
     pub last_activity: SystemTime,
+    pub winner: Option<PlayerId>,
 }
 
 impl fmt::Debug for Room {
@@ -116,6 +117,7 @@ impl Room {
             current_question: None,
             current_buzzer: None,
             last_activity: SystemTime::now(),
+            winner: None,
         }
     }
 
@@ -125,6 +127,32 @@ impl Room {
 }
 
 impl Room {
+    fn determine_winner(&mut self) {
+        if self.players.is_empty() {
+            self.winner = None;
+            return;
+        }
+
+        let max_score = self
+            .players
+            .iter()
+            .map(|p| p.player.score)
+            .max()
+            .unwrap_or(0);
+
+        let winners: Vec<_> = self
+            .players
+            .iter()
+            .filter(|p| p.player.score == max_score)
+            .collect();
+
+        self.winner = if winners.len() == 1 {
+            Some(winners[0].player.pid)
+        } else {
+            None
+        };
+    }
+
     fn build_game_state_msg(&self) -> WsMsg {
         let players: Vec<Player> = self.players.iter().map(|e| e.player.clone()).collect();
 
@@ -134,6 +162,7 @@ impl Room {
             players,
             current_question: self.current_question,
             current_buzzer: self.current_buzzer,
+            winner: self.winner,
         }
     }
 
@@ -222,6 +251,7 @@ impl Room {
             }
 
             WsMsg::EndGame {} => {
+                self.determine_winner();
                 self.state = GameState::GameEnd;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
@@ -279,6 +309,7 @@ impl Room {
             self.state = if self.has_remaining_questions() {
                 GameState::Selection
             } else {
+                self.determine_winner();
                 GameState::GameEnd
             };
         } else if any_can_buzz {
@@ -291,6 +322,7 @@ impl Room {
             self.state = if self.has_remaining_questions() {
                 GameState::Selection
             } else {
+                self.determine_winner();
                 GameState::GameEnd
             };
         }
@@ -345,6 +377,73 @@ pub enum GameState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_winner_determined_on_game_end() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Winner");
+        add_test_player(&mut room, 2, "Loser");
+
+        room.players[0].player.score = 1000;
+        room.players[1].player.score = 500;
+
+        room.state = GameState::Answer;
+        room.current_question = Some((0, 1));
+        room.current_buzzer = Some(1);
+        room.categories[0].questions[0].answered = true;
+
+        room.handle_message(&WsMsg::HostChecked { correct: true }, None);
+
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(room.winner, Some(1), "Player 1 should be winner");
+    }
+
+    #[test]
+    fn test_tie_results_in_no_winner() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+        add_test_player(&mut room, 2, "Player2");
+
+        room.players[0].player.score = 1000;
+        room.players[1].player.score = 1000;
+
+        room.determine_winner();
+
+        assert_eq!(room.winner, None, "Tie should result in no winner");
+    }
+
+    #[test]
+    fn test_manual_end_game_determines_winner() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Winner");
+        add_test_player(&mut room, 2, "Loser");
+
+        room.players[0].player.score = 800;
+        room.players[1].player.score = 200;
+
+        room.handle_message(&WsMsg::EndGame {}, None);
+
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(room.winner, Some(1));
+    }
+
+    #[test]
+    fn test_negative_scores_winner() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "LeastBad");
+        add_test_player(&mut room, 2, "ReallyBad");
+
+        room.players[0].player.score = -200;
+        room.players[1].player.score = -1000;
+
+        room.determine_winner();
+
+        assert_eq!(
+            room.winner,
+            Some(1),
+            "Player with higher negative score wins"
+        );
+    }
 
     fn create_test_room() -> Room {
         let mut room = Room::new("TEST".to_string(), "token".to_string());

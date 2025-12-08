@@ -26,6 +26,7 @@ pub enum WsMsg {
         current_question: Option<(usize, usize)>,
         #[serde(rename = "currentBuzzer")]
         current_buzzer: Option<PlayerId>,
+        winner: Option<PlayerId>,
     },
 
     PlayerState {
