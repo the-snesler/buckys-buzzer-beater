@@ -11,9 +11,13 @@ use std::{
 
 use anyhow::anyhow;
 use axum::{
+    Json, Router,
     extract::{
-        ws::{Message, Utf8Bytes, WebSocket}, Path, Query, State, WebSocketUpgrade
-    }, response::{IntoResponse, Response}, routing::{any, get, post}, Json, Router
+        Path, Query, State, WebSocketUpgrade,
+        ws::{Message, Utf8Bytes, WebSocket},
+    },
+    response::{IntoResponse, Response},
+    routing::{any, get, post},
 };
 pub use game::{GameState, Room};
 pub use host::HostEntry;
