@@ -365,18 +365,22 @@ async fn ws_socket_handler(
                         | WsMsg::BuzzDisable {}
                         | WsMsg::Buzz {}) = msg.clone() {
                         let witness = WsMsg::Witness { msg: Box::new(m) };
-                        let mut room_map = state.room_map.lock().await;
-                        let room = room_map
-                            .get_mut(&code)
-                            .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-                        for player in &room.players {
-                            let cpid = player.player.pid;
-                            let csender = player.sender.clone();
-                            let lat: u64 = player.latency()?.into();
+                        let player_info: Vec<(u32, tokio_mpmc::Sender<WsMsg>, u64)> = {
+                            let room_map = state.room_map.lock().await;
+                            let room = room_map
+                                .get(&code)
+                                .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
+                            room.players
+                                .iter()
+                                .map(|p| (p.player.pid, p.sender.clone(), p.latency().unwrap_or(0).into()))
+                                .collect()
+                        };
+                        let sender_player_id = connection_player_id;
+                        for (cpid, csender, lat) in player_info {
                             let witnessc = witness.clone();
                             let latc = lat;
                             tokio::spawn(async move {
-                                if let Some(id) = connection_player_id
+                                if let Some(id) = sender_player_id
                                     && cpid == id {
                                         return Ok(());
                                     }
