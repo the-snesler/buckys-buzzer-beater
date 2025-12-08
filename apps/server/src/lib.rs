@@ -317,7 +317,7 @@ async fn ws_socket_handler(
         } else if let Some(name) = player_name {
             let new_id: u32 = (room.players.len() + 1).try_into()?;
             connection_player_id = Some(new_id);
-            
+
             tracing::Span::current().record("player_id", new_id);
 
             let player_token = generate_player_token();

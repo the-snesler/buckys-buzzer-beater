@@ -207,11 +207,7 @@ impl Room {
                 category_index,
                 question_index,
             } => {
-                tracing::debug!(
-                    category_index,
-                    question_index,
-                    "Host selected question"
-                );
+                tracing::debug!(category_index, question_index, "Host selected question");
                 self.current_question = Some((*category_index, *question_index));
                 self.current_buzzer = None;
                 for player in &mut self.players {
