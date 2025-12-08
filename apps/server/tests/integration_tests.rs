@@ -822,3 +822,111 @@ mod gameplay_tests {
         }
     }
 }
+
+mod room_cleanup {
+    use std::sync::Arc;
+
+    use madhacks2025::{AppState, Room, cleanup_inactive_rooms};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_active_room_not_cleaned_up() {
+        let state = Arc::new(AppState::with_ttl(Duration::from_secs(60)));
+        let mut room_map = state.room_map.lock().await;
+
+        let room = Room::new("TEST01".to_string(), "token".to_string());
+        room_map.insert("TEST01".to_string(), room);
+        drop(room_map);
+
+        cleanup_inactive_rooms(&state).await;
+
+        let room_map = state.room_map.lock().await;
+        assert!(
+            room_map.contains_key("TEST01"),
+            "Active room should not be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_inactive_room_cleaned_up() {
+        let state = Arc::new(AppState::with_ttl(Duration::from_millis(100)));
+        let mut room_map = state.room_map.lock().await;
+
+        let room = Room::new("TEST01".to_string(), "token".to_string());
+        room_map.insert("TEST01".to_string(), room);
+        drop(room_map);
+
+        // Total time waited: 1s
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        cleanup_inactive_rooms(&state).await;
+
+        let room_map = state.room_map.lock().await;
+        assert!(
+            !room_map.contains_key("TEST01"),
+            "Inactive room should be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_touch_extends_room_lifetime() {
+        let state = Arc::new(AppState::with_ttl(Duration::from_millis(100)));
+        let mut room_map = state.room_map.lock().await;
+
+        let room = Room::new("TEST01".to_string(), "token".to_string());
+        room_map.insert("TEST01".to_string(), room);
+        drop(room_map);
+
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let mut room_map = state.room_map.lock().await;
+        room_map
+            .get_mut("TEST01")
+            .expect("TEST01 should be in room map")
+            .touch();
+        drop(room_map);
+
+        // Total time waited: 160ms
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        cleanup_inactive_rooms(&state).await;
+
+        let room_map = state.room_map.lock().await;
+        assert!(
+            room_map.contains_key("TEST01"),
+            "Touched room should not be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_only_inactive_rooms() {
+        let state = Arc::new(AppState::with_ttl(Duration::from_millis(150)));
+        let mut room_map = state.room_map.lock().await;
+
+        room_map.insert(
+            "ACTIVE".to_string(),
+            Room::new("ACTIVE".to_string(), "t1".to_string()),
+        );
+        room_map.insert(
+            "STALE1".to_string(),
+            Room::new("STALE1".to_string(), "t2".to_string()),
+        );
+
+        // Wait a bit to allow STALE1 to expire before ACTIVE
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        room_map
+            .get_mut("ACTIVE")
+            .expect("ACTIVE should be in room map")
+            .touch();
+        drop(room_map);
+
+        // Wait for STALE1 to expire
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        cleanup_inactive_rooms(&state).await;
+
+        let room_map = state.room_map.lock().await;
+        assert!(room_map.contains_key("ACTIVE"));
+        assert!(!room_map.contains_key("STALE1"));
+    }
+}
