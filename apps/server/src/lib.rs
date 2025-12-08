@@ -252,6 +252,7 @@ async fn ws_socket_handler(
                     players,
                     current_question: room.current_question,
                     current_buzzer: room.current_buzzer,
+                    winner: None,
                 };
                 tx.send(game_state_msg).await?;
             }
