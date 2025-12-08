@@ -122,6 +122,7 @@ fn generate_player_token() -> String {
         .collect()
 }
 
+#[tracing::instrument(skip(state, body))]
 async fn create_room(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateRoomRequest>,
@@ -172,7 +173,7 @@ pub enum ConnectionStatus {
     Connected,
     Disconnected,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct RoomParams {
     code: String,
 }
@@ -222,6 +223,15 @@ async fn send_player_list_to_host(host: &HostEntry, players: &[PlayerEntry]) -> 
     Ok(())
 }
 
+#[tracing::instrument(
+    name = "ws_handler",
+    skip(ws, state),
+    fields(
+        room_code = %code,
+        player_id = tracing::field::Empty,
+        is_host = tracing::field::Empty
+    )
+)]
 async fn ws_socket_handler(
     mut ws: WebSocket,
     RoomParams { code }: RoomParams,
@@ -254,11 +264,13 @@ async fn ws_socket_handler(
 
         let is_host = token.as_ref() == Some(&room.host_token);
 
+        tracing::Span::current().record("is_host", is_host);
+
         if is_host {
             let host = HostEntry::new(player_id.unwrap_or(0), tx.clone());
             send_player_list_to_host(&host, &room.players).await?;
 
-            tracing::info!(room_code = %code, "Host connected");
+            tracing::info!("Host connected");
 
             if room.state != GameState::Start {
                 let players: Vec<Player> = room.players.iter().map(|e| e.player.clone()).collect();
@@ -271,7 +283,7 @@ async fn ws_socket_handler(
                     winner: None,
                 };
                 tx.send(game_state_msg).await?;
-                tracing::debug!(room_code = %code, state = ?room.state, "Sending game state to reconnecting host");
+                tracing::debug!(state = ?room.state, "Sending game state to reconnecting host");
             }
 
             room.host = Some(host);
@@ -280,7 +292,9 @@ async fn ws_socket_handler(
                 // Update existing player's send channel
                 existing.sender = tx.clone();
 
-                tracing::info!(room_code = %code, player_id = id, "Player reconnected");
+                tracing::Span::current().record("player_id", id);
+
+                tracing::info!("Player reconnected");
 
                 let can_buzz = room.state == GameState::WaitingForBuzz;
                 let player_state_msg = WsMsg::PlayerState {
@@ -303,6 +317,9 @@ async fn ws_socket_handler(
         } else if let Some(name) = player_name {
             let new_id: u32 = (room.players.len() + 1).try_into()?;
             connection_player_id = Some(new_id);
+            
+            tracing::Span::current().record("player_id", new_id);
+
             let player_token = generate_player_token();
             let player = PlayerEntry::new(
                 Player::new(new_id, name.clone(), 0, false, player_token.clone()),
@@ -310,7 +327,7 @@ async fn ws_socket_handler(
             );
             room.players.push(player);
 
-            tracing::info!(room_code = %code, player_id = new_id, player_name = %name, "Player joined");
+            tracing::info!(player_name = %name, "Player joined");
 
             let new_player_msg = WsMsg::NewPlayer {
                 pid: new_id,
@@ -324,6 +341,9 @@ async fn ws_socket_handler(
         } else if let Some(tok) = &token {
             if let Some(existing) = room.players.iter_mut().find(|p| p.player.token == *tok) {
                 connection_player_id = Some(existing.player.pid);
+
+                tracing::Span::current().record("player_id", existing.player.pid);
+
                 existing.sender = tx.clone();
 
                 let can_buzz = room.state == GameState::WaitingForBuzz;
@@ -427,11 +447,11 @@ async fn ws_socket_handler(
             }
         }
     }
-    tracing::info!(room_code = %code, ?connection_player_id, "WebSocket connection closed");
+    tracing::info!(?connection_player_id, "WebSocket connection closed");
     Ok(())
 }
 
-//#[debug_handler]
+#[tracing::instrument(skip(state), fields(room_code = %rp.code))]
 async fn cpr_handler(
     State(state): State<Arc<AppState>>,
     Path(rp @ RoomParams { .. }): Path<RoomParams>,
@@ -451,7 +471,7 @@ async fn cpr_handler(
                         Ok(()) => {}
                         Err(e) => {
                             tracing::warn!(
-                            player_id = entry.player.pid,
+                                player_id = entry.player.pid,
                                 error = %e,
                                 "Heartbeat failed"
                             );
@@ -470,12 +490,13 @@ async fn cpr_handler(
     match res {
         Ok(s) => s,
         Err(e) => {
-            println!("cpr_handler failure, did not panic: {e}");
+            tracing::error!(error = %e, "CPR handler failed");
             format!("Err, {e}")
         }
     }
 }
 
+#[tracing::instrument(skip(state))]
 pub async fn cleanup_inactive_rooms(state: &Arc<AppState>) {
     let mut room_map = state.room_map.lock().await;
     let threshold = SystemTime::now()

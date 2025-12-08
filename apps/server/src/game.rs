@@ -193,10 +193,11 @@ impl Room {
         })
     }
 
+    #[tracing::instrument(skip(self, msg), fields(room_code = %self.code))]
     pub fn handle_message(&mut self, msg: &WsMsg, sender_id: Option<PlayerId>) -> RoomResponse {
         match msg {
             WsMsg::StartGame {} => {
-                tracing::info!(room_code = %self.code, "Game started");
+                tracing::info!("Game started");
                 self.state = GameState::Selection;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
@@ -207,7 +208,6 @@ impl Room {
                 question_index,
             } => {
                 tracing::debug!(
-                    room_code = %self.code,
                     category_index,
                     question_index,
                     "Host selected question"
@@ -230,7 +230,6 @@ impl Room {
                     && !player_entry.player.buzzed
                 {
                     tracing::info!(
-                        room_code = %self.code,
                         player_id,
                         player_name = %player_entry.player.name,
                         "Player buzzed in"
@@ -280,7 +279,7 @@ impl Room {
 
             WsMsg::EndGame {} => {
                 self.determine_winner();
-                tracing::info!(room_code = %self.code, ?self.winner, "Game ended");
+                tracing::info!(?self.winner, "Game ended");
                 self.state = GameState::GameEnd;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
@@ -360,8 +359,9 @@ impl Room {
             .merge(self.build_all_player_states())
     }
 
+    #[tracing::instrument(skip(self, msg), fields(room_code = %self.code))]
     pub async fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) -> anyhow::Result<()> {
-        tracing::trace!(room_code = %self.code, ?msg, ?pid, "Processing message");
+        tracing::trace!(?msg, ?pid, "Processing message");
 
         let response = self.handle_message(msg, pid);
 
