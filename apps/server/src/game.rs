@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, time::SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,7 @@ pub struct Room {
     pub categories: Vec<Category>,
     pub current_question: Option<(usize, usize)>, // (category_index, question_index)
     pub current_buzzer: Option<PlayerId>,
+    pub last_activity: SystemTime,
 }
 
 impl fmt::Debug for Room {
@@ -114,7 +115,12 @@ impl Room {
             categories: Vec::new(),
             current_question: None,
             current_buzzer: None,
+            last_activity: SystemTime::now(),
         }
+    }
+
+    pub fn touch(&mut self) {
+        self.last_activity = SystemTime::now();
     }
 }
 
