@@ -4,17 +4,25 @@
 
 html {
   overscroll-behavior: none;
+  background-color: #1c1917;
 }
 
 /* bg-gradient-to-br from-red-900 via-red-800 to-stone-900 */
 .fancy-bg {
-  background: 
-    radial-gradient(#8768681f 5px,transparent 0),radial-gradient(#8768681f 5px,transparent 0),
-    linear-gradient(135deg, 
-      #7f1d1d 0%, 
-      #991b1b 50%, 
-      #1c1917 100%
-    );
-  background-size: 30px 30px,30px 30px, auto;
-  background-position: 0 0,calc(15px) calc(15px),0 0;
+  background: radial-gradient(#8768681f 5px, transparent 0),
+    radial-gradient(#8768681f 5px, transparent 0),
+    linear-gradient(135deg, #7f1d1d 0%, #991b1b 50%, #1c1917 100%);
+  background-size: 30px 30px, 30px 30px, auto;
+  background-position: 0 0, calc(15px) calc(15px), 0 0;
+}
+
+@media (max-width: 640px) {
+  .fancy-bg {
+    background: linear-gradient(0deg, #1c1917, #1c191700 100px),
+      radial-gradient(#8768681f 3px, transparent 0),
+      radial-gradient(#8768681f 3px, transparent 0),
+      linear-gradient(135deg, #7f1d1d 0%, #991b1b 50%, #1c1917 100%);
+    background-size: auto, 20px 20px, 20px 20px, auto;
+    background-position: 0 0, 0 0, calc(10px) calc(10px), 0 0;
+  }
 }
