@@ -1,4 +1,4 @@
-name: Build and Push Docker Image to GHCR
+name: Deploy (main)
 
 on:
   push:
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write # Required to push to GHCR
+      packages: write
 
     steps:
       - name: Checkout repository
