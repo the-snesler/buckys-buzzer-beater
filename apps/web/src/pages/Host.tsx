@@ -47,7 +47,7 @@ export default function Host() {
         // Send current game state when display is ready
         if (displayWindowRef.current && !displayWindowRef.current.closed) {
           displayWindowRef.current.postMessage(
-            { gameState, buzzedPlayer },
+            { gameState, buzzedPlayer, playerList },
             "*"
           );
         }
@@ -55,11 +55,14 @@ export default function Host() {
     };
 
     if (displayWindowRef.current && !displayWindowRef.current.closed) {
-      displayWindowRef.current.postMessage({ gameState, buzzedPlayer }, "*");
+      displayWindowRef.current.postMessage(
+        { gameState, buzzedPlayer, playerList },
+        "*"
+      );
     }
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [gameState, buzzedPlayer]);
+  }, [gameState, playerList, buzzedPlayer]);
 
   const openDisplayWindow = () => {
     const popup = window.open(
