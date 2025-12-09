@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useLocation, Link } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
 import { createRoom, type Category } from '../lib/api';
 
 interface LocationState {
@@ -10,6 +10,7 @@ interface LocationState {
 export default function Lobby() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [roomCode, setRoomCode] = useState('');
   const [playerName, setPlayerName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
@@ -29,6 +30,14 @@ export default function Lobby() {
       window.history.replaceState({}, document.title);
     }
   }, [location.state]);
+
+  // Pre-fill room code from URL query parameter
+  useEffect(() => {
+    const codeParam = searchParams.get('code');
+    if (codeParam && codeParam.length === 6) {
+      setRoomCode(codeParam.toUpperCase());
+    }
+  }, [searchParams]);
 
   const loadDefaultGame = async () => {
     setError(null);
