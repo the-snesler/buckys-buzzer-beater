@@ -8,6 +8,8 @@ export default function Player() {
   const [canBuzz, setCanBuzz] = useState(false);
   const [score, setScore] = useState<number>(0);
   const [hasBuzzed, setHasBuzzed] = useState(false);
+  const [gameStarted, setGameStarted] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   // Check for existing session
   const existingPlayerName = sessionStorage.getItem(`player_name`);
@@ -43,7 +45,8 @@ export default function Player() {
           break;
         case "GameState":
           const gameState = payload as {
-            state: String };
+            state: String;
+          };
           if (gameState.state === "waitingForBuzz") {
             setCanBuzz(true);
             setHasBuzzed(false);
@@ -64,10 +67,27 @@ export default function Player() {
         case "AnswerResult":
           setHasBuzzed(false);
           break;
+        case "Witness":
+          const witnessMsg = payload as any;
+          if (witnessMsg.msg && witnessMsg.msg.StartGame) {
+            setGameStarted(true);
+          }
+          break;
       }
     },
     autoConnect: true,
   });
+
+  const copyJoinLink = async () => {
+    const joinUrl = `${window.location.origin}/?code=${code}`;
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  };
 
   const handleBuzz = () => {
     if (canBuzz && !hasBuzzed) {
@@ -94,12 +114,32 @@ export default function Player() {
           >
             {isConnected ? "Connected" : "Reconnecting..."}
           </div>
-          <div className={`text-2xl font-bold ${
-              score < 0 ? "text-red-500" : score === 0 ? "text-gray-500" : "text-green-400"
-            }`}>
-              ${score}
+          <div
+            className={`text-2xl font-bold ${
+              score < 0
+                ? "text-red-500"
+                : score === 0
+                ? "text-gray-500"
+                : "text-green-400"
+            }`}
+          >
+            ${score}
           </div>
         </div>
+
+        {!gameStarted && (
+          <div className="bg-gray-800 rounded-lg p-6 mb-4">
+            <h2 className="text-xl font-semibold text-white mb-3">
+              Waiting for the host to start the game...
+            </h2>
+            <button
+              onClick={copyJoinLink}
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 transition-colors"
+            >
+              {copySuccess ? "✓ Copied!" : "Copy Join Link"}
+            </button>
+          </div>
+        )}
 
         <div className="bg-gray-800 rounded-lg p-6 flex flex-col items-center">
           <button
