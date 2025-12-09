@@ -1,6 +1,7 @@
 import { useParams } from "react-router-dom";
 import { useState, useEffect } from "react";
 import React from "react";
+import { QRCodeSVG } from "qrcode.react";
 
 interface Question {
   question: string;
@@ -31,6 +32,7 @@ interface GameState {
 interface DisplayMessage {
   gameState: GameState | null;
   buzzedPlayer: { pid: number; name: string } | null;
+  playerList: PlayerState[];
 }
 
 export default function HostDisplay() {
@@ -40,6 +42,7 @@ export default function HostDisplay() {
     pid: number;
     name: string;
   } | null>(null);
+  const [playerList, setPlayerList] = useState<PlayerState[]>([]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent<DisplayMessage>) => {
@@ -52,6 +55,7 @@ export default function HostDisplay() {
       ) {
         setGameState(event.data.gameState);
         setBuzzedPlayer(event.data.buzzedPlayer);
+        setPlayerList(event.data.playerList || []);
       }
     };
     // post message to let host know we're ready to receive updates
@@ -64,12 +68,48 @@ export default function HostDisplay() {
   // Waiting for connection from host window
   if (!gameState) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-red-900">
+      <div className="min-h-screen flex items-center justify-center bg-red-900 fancy-bg">
         <div className="text-white text-center">
           <h1 className="text-4xl font-bold mb-4">Room: {code}</h1>
           <p className="text-2xl text-red-300 animate-pulse">
-            Waiting for host to connect...
+            Waiting for the game to start...
           </p>
+          <div className="flex flex-col md:flex-row items-center gap-6 mt-12">
+            <div className="bg-white p-4 rounded-lg">
+              <QRCodeSVG
+                value={`${window.location.origin}/?code=${code}`}
+                size={200}
+                level="M"
+              />
+            </div>
+            <div className="flex-1 text-center md:text-left">
+              <p className="text-gray-400 mb-2">Scan QR code or visit:</p>
+              <p className="text-white font-mono text-lg mb-3">
+                {window.location.origin}
+              </p>
+              <p className="text-gray-400 mb-1">Room Code:</p>
+              <p className="text-yellow-400 font-bold text-4xl tracking-widest">
+                {code}
+              </p>
+            </div>
+          </div>
+          <div className="mt-12 p-6">
+            <h2 className="text-2xl font-semibold text-white mb-4">Players</h2>
+            {playerList.length === 0 ? (
+              <p className="text-gray-400">No players have joined yet.</p>
+            ) : (
+              <ul className="flex flex-wrap max-w-screen-md gap-4 justify-center">
+                {playerList.map((player) => (
+                  <li
+                    key={player.pid}
+                    className="bg-white/10 rounded p-3 text-white"
+                  >
+                    {player.name}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -207,9 +247,17 @@ export default function HostDisplay() {
                     <span className="text-3xl font-bold">
                       {idx + 1}. {player.name}
                     </span>
-                    <span className={`text-3xl ${
-                        player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : ""
-                      }`}>${player.score}</span>
+                    <span
+                      className={`text-3xl ${
+                        player.score < 0
+                          ? "text-red-500"
+                          : player.score === 0
+                          ? "text-gray-500"
+                          : ""
+                      }`}
+                    >
+                      ${player.score}
+                    </span>
                   </div>
                 ))}
             </div>
@@ -230,9 +278,17 @@ export default function HostDisplay() {
                   }`}
                 >
                   <p className="font-semibold text-lg">{player.name}</p>
-                  <p className={`text-2xl font-bold ${
-                      player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : ""
-                    }`}>${player.score}</p>
+                  <p
+                    className={`text-2xl font-bold ${
+                      player.score < 0
+                        ? "text-red-500"
+                        : player.score === 0
+                        ? "text-gray-500"
+                        : ""
+                    }`}
+                  >
+                    ${player.score}
+                  </p>
                 </div>
               ))}
             </div>

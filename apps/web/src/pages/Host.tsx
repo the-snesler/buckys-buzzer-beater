@@ -1,6 +1,7 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useState, useRef, useEffect } from "react";
+import { QRCodeSVG } from "qrcode.react";
 
 interface Question {
   question: string;
@@ -34,6 +35,7 @@ export default function Host() {
   const [playerList, setPlayerList] = useState<PlayerState[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [buzzedPlayer, setBuzzedPlayer] = useState<{ pid: number; name: string } | null>(null);
+  const [copySuccess, setCopySuccess] = useState(false);
   const displayWindowRef = useRef<Window | null>(null);
   const hostToken = sessionStorage.getItem(`host_token_${code}`);
 
@@ -45,7 +47,7 @@ export default function Host() {
         // Send current game state when display is ready
         if (displayWindowRef.current && !displayWindowRef.current.closed) {
           displayWindowRef.current.postMessage(
-            { gameState, buzzedPlayer },
+            { gameState, buzzedPlayer, playerList },
             "*"
           );
         }
@@ -53,11 +55,14 @@ export default function Host() {
     };
 
     if (displayWindowRef.current && !displayWindowRef.current.closed) {
-      displayWindowRef.current.postMessage({ gameState, buzzedPlayer }, "*");
+      displayWindowRef.current.postMessage(
+        { gameState, buzzedPlayer, playerList },
+        "*"
+      );
     }
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [gameState, buzzedPlayer]);
+  }, [gameState, playerList, buzzedPlayer]);
 
   const openDisplayWindow = () => {
     const popup = window.open(
@@ -67,6 +72,17 @@ export default function Host() {
     );
     displayWindowRef.current = popup;
     popup?.postMessage({ gameState, buzzedPlayer }, "*");
+  };
+
+  const copyJoinLink = async () => {
+    const joinUrl = `${window.location.origin}/?code=${code}`;
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
   };
 
   const { isConnected, sendMessage } = useWebSocket({
@@ -286,30 +302,61 @@ export default function Host() {
           </div>
         ) : (
           /* Lobby - Show players and start button */
-          <div className="bg-gray-800 rounded-lg p-6">
-            <h2 className="text-2xl font-semibold text-white mb-4">Players</h2>
-            {playerList.length === 0 ? (
-              <p className="text-gray-400">No players have joined yet.</p>
-            ) : (
-              <ul className="space-y-2">
-                {playerList.map((player) => (
-                  <li
-                    key={player.pid}
-                    className="bg-gray-700 rounded p-3 text-white"
+          <div className="space-y-6">
+            {/* QR Code for joining */}
+            <div className="bg-gray-800 rounded-lg p-6">
+              <h2 className="text-2xl font-semibold text-white mb-4">Join Game</h2>
+              <div className="flex flex-col md:flex-row items-center gap-6">
+                <div className="bg-white p-4 rounded-lg">
+                  <QRCodeSVG
+                    value={`${window.location.origin}/?code=${code}`}
+                    size={200}
+                    level="M"
+                  />
+                </div>
+                <div className="flex-1 text-center md:text-left">
+                  <p className="text-gray-400 mb-2">Scan QR code or visit:</p>
+                  <p className="text-white font-mono text-lg mb-3">{window.location.origin}</p>
+                  <p className="text-gray-400 mb-1">Room Code:</p>
+                  <p className="text-yellow-400 font-bold text-4xl tracking-widest">
+                    {code}
+                  </p>
+                  <button
+                    onClick={copyJoinLink}
+                    className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 transition-colors"
                   >
-                    {player.name} (Score: ${player.score})
-                  </li>
-                ))}
-              </ul>
-            )}
-            {playerList.length >= 1 && (
-              <button
-                onClick={() => sendMessage({ StartGame: {} })}
-                className="mt-6 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-              >
-                Start Game
-              </button>
-            )}
+                    {copySuccess ? "✓ Copied!" : "Copy Link"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Player List */}
+            <div className="bg-gray-800 rounded-lg p-6">
+              <h2 className="text-2xl font-semibold text-white mb-4">Players</h2>
+              {playerList.length === 0 ? (
+                <p className="text-gray-400">No players have joined yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {playerList.map((player) => (
+                    <li
+                      key={player.pid}
+                      className="bg-gray-700 rounded p-3 text-white"
+                    >
+                      {player.name} (Score: ${player.score})
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {playerList.length >= 1 && (
+                <button
+                  onClick={() => sendMessage({ StartGame: {} })}
+                  className="mt-6 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                >
+                  Start Game
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
