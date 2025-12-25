@@ -183,7 +183,7 @@ export default function Lobby() {
         </div>
 
         {/* Join Game Card */}
-        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-8 mb-6 border-4 border-red-700 transform hover:scale-[1.02] transition-transform">
+        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-4 md:p-8 mb-6 border-4 border-red-700 transform hover:scale-[1.02] transition-transform">
           <h3
             className="text-2xl font-black text-red-900 mb-6 tracking-wide"
             style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}
@@ -191,7 +191,7 @@ export default function Lobby() {
             JOIN A GAME
           </h3>
           <form onSubmit={handleJoin}>
-            <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
               <div>
                 <label className="block text-red-900 font-bold mb-2 text-sm uppercase tracking-wider">
                   Room Code
@@ -232,7 +232,7 @@ export default function Lobby() {
         </div>
 
         {/* Host Game Card */}
-        <div className="bg-stone-900/90 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border-4 border-stone-700 transform hover:scale-[1.02] transition-transform">
+        <div className="bg-stone-900/90 backdrop-blur-sm rounded-2xl shadow-2xl p-4 md:p-8 border-4 border-stone-700 transform hover:scale-[1.02] transition-transform">
           <h3
             className="text-2xl font-black text-white mb-6 tracking-wide"
             style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}
@@ -241,7 +241,7 @@ export default function Lobby() {
           </h3>
 
           <div className="mb-6">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-3 gap-2">
               <label className="text-white font-bold text-sm uppercase tracking-wider">
                 Choose Game
               </label>
@@ -272,10 +272,10 @@ export default function Lobby() {
 
             {categories && (
               <div className="mt-3 flex items-center gap-2 text-green-300 bg-green-900/30 border-2 border-green-700 rounded-lg px-4 py-3">
-                <span className="text-xl">✓</span>
-                <p className="font-semibold">
+                <span className="text-xl flex-shrink-0">✓</span>
+                <p className="font-semibold break-words">
                   Loaded {categories.length} categories from{" "}
-                  <span className="font-black">
+                  <span className="font-black break-all">
                     {fromBuilder ? "Game Builder" : fileName}
                   </span>
                 </p>
