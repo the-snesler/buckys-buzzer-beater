@@ -139,30 +139,30 @@ export default function Lobby() {
   };
 
   return (
-    <div className="min-h-screen py-24 flex flex-col items-center justify-center fancy-bg relative overflow-hidden">
+    <div className="min-h-screen py-8 md:py-24 flex flex-col items-center justify-center fancy-bg relative overflow-hidden">
       <div className="relative z-10 w-full max-w-2xl px-6">
         {/* Icon and Title Section */}
         <div className="text-center mb-12">
-          <div className="flex items-center justify-center gap-8 mb-6">
+          <div className="flex items-center justify-center gap-4 md:gap-8 mb-6">
             <img
               src="/bucky.svg"
               alt="Bucky"
-              className="w-20 h-20 opacity-80 hover:scale-125 transition-transform duration-300"
+              className="hidden md:block w-20 h-20 opacity-80 hover:scale-125 transition-transform duration-300"
             />
             <img
               src="/apple-touch-icon.png"
               alt="Bucky's Buzzer"
-              className="w-32 h-32 drop-shadow-2xl hover:scale-110 hover:rotate-3 transition-transform rounded-xl border-t border-1 border-red-600 duration-300"
+              className="w-24 md:w-32 h-24 md:h-32 drop-shadow-2xl hover:scale-110 hover:rotate-3 transition-transform rounded-xl border-t border-1 border-red-600 duration-300"
             />
             <img
               src="/bucky.svg"
               alt="Bucky"
-              className="w-20 h-20 opacity-80 hover:scale-125 transition-transform duration-300"
+              className="hidden md:block w-20 h-20 opacity-80 hover:scale-125 transition-transform duration-300"
               style={{ transform: "scaleX(-1)" }}
             />
           </div>
           <h1
-            className="text-6xl font-black text-white mb-3 tracking-tight"
+            className="text-4xl md:text-6xl font-black text-white mb-3 tracking-tight"
             style={{
               fontFamily: 'Impact, "Arial Black", sans-serif',
               textShadow: "4px 4px 0px rgba(0,0,0,0.3)",
@@ -171,7 +171,7 @@ export default function Lobby() {
             BUCKY'S
           </h1>
           <h2
-            className="text-5xl font-black text-red-200 tracking-wide"
+            className="text-3xl md:text-5xl font-black text-red-200 tracking-wide"
             style={{
               fontFamily: 'Impact, "Arial Black", sans-serif',
               textShadow: "3px 3px 0px rgba(0,0,0,0.3)",
