@@ -68,7 +68,7 @@ export default function HostDisplay() {
   // Waiting for connection from host window
   if (!gameState) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-red-900 fancy-bg">
+      <div className="min-h-screen flex items-center justify-center fancy-bg">
         <div className="text-white text-center">
           <h1 className="text-4xl font-bold mb-4">Room: {code}</h1>
           <p className="text-2xl text-red-300 animate-pulse">
@@ -116,11 +116,11 @@ export default function HostDisplay() {
   }
 
   return (
-    <div className="min-h-screen flex items-stretch pb-24 justify-stretch bg-red-900 p-8">
+    <div className="min-h-screen flex items-stretch pb-24 justify-stretch fancy-bg p-8">
       <div className="m-8 w-full h-full">
         {/* Selection State - Show game board */}
         {gameState.state === "selection" && (
-          <div className="bg-red-800 rounded-lg p-6">
+          <div className="bg-stone-900/90 backdrop-blur-sm rounded-lg p-6 border-4 border-stone-700">
             <div
               className="grid gap-4 grid-flow-col "
               style={{
@@ -132,7 +132,7 @@ export default function HostDisplay() {
             >
               {gameState.categories.map((category, catIdx) => (
                 <React.Fragment key={catIdx}>
-                  <h3 className="text-center text-yellow-400 font-bold text-lg uppercase py-4 bg-red-700 rounded">
+                  <h3 className="text-center text-white font-bold text-lg uppercase py-4 bg-red-900/80 rounded">
                     {category.title}
                   </h3>
                   {category.questions.map((question, qIdx) => (
@@ -140,8 +140,8 @@ export default function HostDisplay() {
                       key={qIdx}
                       className={`w-full py-6 rounded font-bold text-2xl text-center ${
                         question.answered
-                          ? "bg-red-900 text-red-700"
-                          : "bg-red-600 text-yellow-400"
+                          ? "bg-stone-800 text-stone-600"
+                          : "bg-red-600 text-white border-2 border-red-600"
                       }`}
                     >
                       {question.answered ? "" : `$${question.value}`}
@@ -156,7 +156,7 @@ export default function HostDisplay() {
         {/* Question Reading State */}
         {gameState.state === "questionReading" && gameState.currentQuestion && (
           <div className="flex flex-col items-center justify-center min-h-[80vh]">
-            <p className="text-xl text-yellow-400 mb-4">
+            <p className="text-xl text-red-200 mb-4">
               {gameState.categories[gameState.currentQuestion[0]]?.title} - $
               {
                 gameState.categories[gameState.currentQuestion[0]]?.questions[
@@ -177,7 +177,7 @@ export default function HostDisplay() {
         {/* Waiting for Buzz State */}
         {gameState.state === "waitingForBuzz" && gameState.currentQuestion && (
           <div className="flex flex-col items-center justify-center min-h-[80vh]">
-            <p className="text-xl text-yellow-400 mb-4">
+            <p className="text-xl text-red-200 mb-4">
               {gameState.categories[gameState.currentQuestion[0]]?.title} - $
               {
                 gameState.categories[gameState.currentQuestion[0]]?.questions[
@@ -201,7 +201,7 @@ export default function HostDisplay() {
         {/* Answer State - Show question and who buzzed, but NOT the answer */}
         {gameState.state === "answer" && gameState.currentQuestion && (
           <div className="flex flex-col items-center justify-center min-h-[80vh]">
-            <p className="text-xl text-yellow-400 mb-4">
+            <p className="text-xl text-red-200 mb-4">
               {gameState.categories[gameState.currentQuestion[0]]?.title} - $
               {
                 gameState.categories[gameState.currentQuestion[0]]?.questions[
@@ -217,8 +217,8 @@ export default function HostDisplay() {
               }
             </p>
             {buzzedPlayer && (
-              <div className="bg-yellow-500 px-8 py-4 rounded-lg">
-                <p className="text-4xl text-black font-bold">
+              <div className="bg-white/95 px-12 py-6 border-4 border-red-700 rounded-2xl shadow-2xl">
+                <p className="text-4xl text-red-900 font-bold">
                   {buzzedPlayer.name}
                 </p>
               </div>
@@ -229,7 +229,7 @@ export default function HostDisplay() {
         {/* Game End State */}
         {gameState.state === "gameEnd" && (
           <div className="flex flex-col items-center justify-center min-h-[80vh]">
-            <h2 className="text-5xl font-bold text-yellow-400 mb-12">
+            <h2 className="text-5xl font-bold text-white mb-12">
               Game Over!
             </h2>
             <div className="space-y-4 w-full max-w-2xl">
@@ -240,8 +240,8 @@ export default function HostDisplay() {
                     key={player.pid}
                     className={`p-6 rounded-lg flex justify-between items-center ${
                       idx === 0
-                        ? "bg-yellow-500 text-black"
-                        : "bg-red-700 text-white"
+                        ? "bg-red-700 text-white border-4 border-stone-700"
+                        : "bg-stone-800/90 text-white border-2 border-stone-600"
                     }`}
                   >
                     <span className="text-3xl font-bold">
@@ -266,15 +266,15 @@ export default function HostDisplay() {
 
         {/* Scoreboard - Always visible at bottom */}
         {gameState.state !== "gameEnd" && (
-          <div className="fixed bottom-0 left-0 right-0 bg-red-950 p-4">
+          <div className="fixed bottom-0 left-0 right-0 p-4">
             <div className="max-w-6xl mx-auto flex justify-center gap-8">
               {gameState.players.map((player) => (
                 <div
                   key={player.pid}
-                  className={`px-6 py-3 rounded text-center ${
+                  className={`px-6 py-3 text-center rounded-lg transition-all duration-300 ${
                     buzzedPlayer?.pid === player.pid
-                      ? "bg-yellow-500 text-black"
-                      : "bg-red-800 text-white"
+                      ? "bg-white/95 text-red-900 border-4 border-red-700 rounded-lg scale-110"
+                      : "bg-stone-800 text-white border-4 border-stone-600 rounded-lg"
                   }`}
                 >
                   <p className="font-semibold text-lg">{player.name}</p>
