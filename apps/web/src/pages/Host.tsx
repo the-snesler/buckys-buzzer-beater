@@ -226,7 +226,13 @@ export default function Host() {
                   {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
                 </p>
                 <div className="text-center">
-                  <p className="text-2xl text-green-400 animate-pulse">Waiting for buzz...</p>
+                  <p className="text-2xl text-green-400 animate-pulse mb-4">Waiting for buzz...</p>
+                  <button
+                    onClick={() => sendMessage({ HostSkip: {} })}
+                    className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
+                  >
+                    Skip Question
+                  </button>
                 </div>
               </div>
             )}

@@ -254,6 +254,8 @@ impl Room {
 
             WsMsg::HostChecked { correct } => self.handle_host_checked(*correct),
 
+            WsMsg::HostSkip {} => self.handle_host_skip(),
+
             WsMsg::Heartbeat { hbid, t_dohb_recv } => {
                 if let Some(sender_id) = sender_id
                     && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
@@ -350,6 +352,47 @@ impl Room {
                 GameState::GameEnd
             };
         }
+
+        RoomResponse::broadcast_state(self.build_game_state_msg())
+            .merge(self.build_all_player_states())
+    }
+
+    fn handle_host_skip(&mut self) -> RoomResponse {
+        let Some((cat_idx, q_idx)) = self.current_question else {
+            return RoomResponse::new();
+        };
+
+        tracing::info!(
+            category_index = cat_idx,
+            question_index = q_idx,
+            "Host skipped question"
+        );
+
+        // Mark question as answered
+        if let Some(question) = self
+            .categories
+            .get_mut(cat_idx)
+            .and_then(|cat| cat.questions.get_mut(q_idx))
+        {
+            question.answered = true;
+        }
+
+        // Clear current question and buzzer
+        self.current_question = None;
+        self.current_buzzer = None;
+
+        // Reset all player buzz states
+        for player in &mut self.players {
+            player.player.buzzed = false;
+        }
+
+        // Transition to Selection or GameEnd
+        self.state = if self.has_remaining_questions() {
+            GameState::Selection
+        } else {
+            self.determine_winner();
+            GameState::GameEnd
+        };
 
         RoomResponse::broadcast_state(self.build_game_state_msg())
             .merge(self.build_all_player_states())
@@ -722,5 +765,130 @@ mod tests {
                 tc.name
             );
         }
+    }
+
+    #[test]
+    fn test_host_skip_marks_question_answered() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+
+        room.state = GameState::WaitingForBuzz;
+        room.current_question = Some((0, 0));
+
+        room.handle_message(&WsMsg::HostSkip {}, None);
+
+        assert!(
+            room.categories[0].questions[0].answered,
+            "Skipped question should be marked as answered"
+        );
+        assert_eq!(room.current_question, None);
+        assert_eq!(room.current_buzzer, None);
+    }
+
+    #[test]
+    fn test_host_skip_transitions_to_selection() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+
+        room.state = GameState::WaitingForBuzz;
+        room.current_question = Some((0, 0));
+
+        room.handle_message(&WsMsg::HostSkip {}, None);
+
+        assert_eq!(
+            room.state,
+            GameState::Selection,
+            "Should return to Selection when questions remain"
+        );
+    }
+
+    #[test]
+    fn test_host_skip_transitions_to_game_end() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Winner");
+        add_test_player(&mut room, 2, "Loser");
+
+        room.players[0].player.score = 500;
+        room.players[1].player.score = 200;
+
+        room.state = GameState::WaitingForBuzz;
+        room.categories[0].questions[0].answered = true;
+        room.current_question = Some((0, 1)); // Last question
+
+        room.handle_message(&WsMsg::HostSkip {}, None);
+
+        assert_eq!(
+            room.state,
+            GameState::GameEnd,
+            "Should transition to GameEnd when no questions remain"
+        );
+        assert_eq!(
+            room.winner,
+            Some(1),
+            "Should determine winner when game ends"
+        );
+    }
+
+    #[test]
+    fn test_host_skip_resets_buzz_states() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+        add_test_player(&mut room, 2, "Player2");
+
+        room.state = GameState::WaitingForBuzz;
+        room.current_question = Some((0, 0));
+        room.players[0].player.buzzed = true;
+        room.players[1].player.buzzed = true;
+        room.current_buzzer = Some(1);
+
+        room.handle_message(&WsMsg::HostSkip {}, None);
+
+        assert!(
+            !room.players[0].player.buzzed,
+            "Player 1 buzz state should be reset"
+        );
+        assert!(
+            !room.players[1].player.buzzed,
+            "Player 2 buzz state should be reset"
+        );
+    }
+
+    #[test]
+    fn test_host_skip_does_not_affect_scores() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+
+        room.state = GameState::WaitingForBuzz;
+        room.current_question = Some((0, 0));
+        room.players[0].player.score = 100;
+
+        room.handle_message(&WsMsg::HostSkip {}, None);
+
+        assert_eq!(
+            room.players[0].player.score,
+            100,
+            "Skipping should not affect player scores"
+        );
+    }
+
+    #[test]
+    fn test_host_skip_without_current_question() {
+        let mut room = create_test_room();
+
+        room.state = GameState::Selection;
+        room.current_question = None;
+
+        let response = room.handle_message(&WsMsg::HostSkip {}, None);
+
+        assert_eq!(
+            room.state,
+            GameState::Selection,
+            "State should not change when there's no current question"
+        );
+        assert_eq!(
+            response.messages_to_host.len(),
+            0,
+            "Should return empty response when there's no current question"
+        );
     }
 }
