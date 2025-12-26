@@ -170,28 +170,30 @@ export default function Host() {
             {gameState.state === "selection" && (
               <div className="bg-gray-800 rounded-lg p-6">
                 <h2 className="text-2xl font-semibold text-white mb-4">Select a Question</h2>
-                <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)` }}>
-                  {gameState.categories.map((category, catIdx) => (
-                    <div key={catIdx} className="space-y-2">
-                      <h3 className="text-center text-yellow-400 font-bold text-sm uppercase truncate">
-                        {category.title}
-                      </h3>
-                      {category.questions.map((question, qIdx) => (
-                        <button
-                          key={qIdx}
-                          disabled={question.answered}
-                          onClick={() => sendMessage({ HostChoice: { categoryIndex: catIdx, questionIndex: qIdx } })}
-                          className={`w-full py-4 rounded font-bold text-lg ${
-                            question.answered
-                              ? "bg-gray-700 text-gray-500 cursor-not-allowed"
-                              : "bg-red-600 text-white hover:bg-red-500"
-                          }`}
-                        >
-                          ${question.value}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
+                <div className="overflow-x-auto">
+                  <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)` }}>
+                    {gameState.categories.map((category, catIdx) => (
+                      <div key={catIdx} className="space-y-2">
+                        <h3 className="text-center text-yellow-400 font-bold text-sm uppercase truncate">
+                          {category.title}
+                        </h3>
+                        {category.questions.map((question, qIdx) => (
+                          <button
+                            key={qIdx}
+                            disabled={question.answered}
+                            onClick={() => sendMessage({ HostChoice: { categoryIndex: catIdx, questionIndex: qIdx } })}
+                            className={`w-full py-4 rounded font-bold text-lg ${
+                              question.answered
+                                ? "bg-gray-700 text-gray-500 cursor-not-allowed"
+                                : "bg-red-600 text-white hover:bg-red-500"
+                            }`}
+                          >
+                            ${question.value}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
