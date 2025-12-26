@@ -42,6 +42,9 @@ export default function Player() {
           setHasBuzzed(playerState.buzzed);
           setCanBuzz(playerState.canBuzz);
           setScore(playerState.score);
+          if (playerState.canBuzz || playerState.score !== 0) {
+            setGameStarted(true);
+          }
           break;
         case "GameState":
           const gameState = payload as {
@@ -50,9 +53,11 @@ export default function Player() {
           if (gameState.state === "waitingForBuzz") {
             setCanBuzz(true);
             setHasBuzzed(false);
+            setGameStarted(true);
           } else if (gameState.state === "selection") {
             setCanBuzz(false);
             setHasBuzzed(false);
+            setGameStarted(true);
           } else {
             setCanBuzz(false);
           }
@@ -60,23 +65,22 @@ export default function Player() {
         case "BuzzEnabled":
           setCanBuzz(true);
           setHasBuzzed(false);
+          setGameStarted(true);
           break;
         case "BuzzDisabled":
           setCanBuzz(false);
+          setGameStarted(true);
           break;
         case "AnswerResult":
           setHasBuzzed(false);
-          break;
-        case "Witness":
-          const witnessMsg = payload as any;
-          if (witnessMsg.msg && witnessMsg.msg.StartGame) {
-            setGameStarted(true);
-          }
+          setGameStarted(true);
           break;
       }
     },
     autoConnect: true,
   });
+
+  const showIndicators = !import.meta.env.PROD;
 
   const copyJoinLink = async () => {
     const joinUrl = `${window.location.origin}/?code=${code}`;
@@ -97,16 +101,18 @@ export default function Player() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 p-4">
+    <div className="min-h-[100svh] bg-gray-900 p-4">
       <div className="max-w-md mx-auto">
         <div className="mb-4 space-y-2">
           <div className="flex justify-between items-center">
-            <button
-              onClick={() => navigate("/")}
-              className="px-2 py-1 bg-gray-700 text-white rounded text-sm hover:bg-gray-600"
-            >
-              ← Back
-            </button>
+            {showIndicators && (
+              <button
+                onClick={() => navigate("/")}
+                className="px-2 py-1 bg-gray-700 text-white rounded text-sm hover:bg-gray-600"
+              >
+                ← Back
+              </button>
+            )}
             <h1 className="text-xl font-bold text-white">Room: {code}</h1>
             <div
               className={`px-2 py-1 rounded text-xs ${

@@ -337,16 +337,16 @@ export default function Host() {
               {playerList.length === 0 ? (
                 <p className="text-gray-400">No players have joined yet.</p>
               ) : (
-                <ul className="space-y-2">
+                <div className="flex flex-wrap justify-center gap-4">
                   {playerList.map((player) => (
-                    <li
+                    <div
                       key={player.pid}
-                      className="bg-gray-700 rounded p-3 text-white"
+                      className="bg-gray-700 rounded py-2 px-4 text-white grow"
                     >
-                      {player.name} (Score: ${player.score})
-                    </li>
+                      {player.name}
+                    </div>
                   ))}
-                </ul>
+                </div>
               )}
               {playerList.length >= 1 && (
                 <button
