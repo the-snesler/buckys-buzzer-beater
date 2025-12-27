@@ -276,35 +276,6 @@ export default function Host() {
               </div>
             )}
 
-            {/* Answer Reveal State */}
-            {gameState.state === "answerReveal" && gameState.currentQuestion && (
-              <div className="bg-gray-800 rounded-lg p-6">
-                <h2 className="text-xl font-semibold text-yellow-400 mb-2">
-                  {gameState.categories[gameState.currentQuestion[0]]?.title} - $
-                  {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.value}
-                </h2>
-                <p className="text-3xl text-white mb-4">
-                  {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
-                </p>
-                <p className="text-2xl text-green-400 mb-6">
-                  Answer: <span className="text-yellow-300">
-                    {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.answer}
-                  </span>
-                </p>
-                {buzzedPlayer && (
-                  <p className="text-lg text-gray-300 mb-6">
-                    Answered by: {buzzedPlayer.name}
-                  </p>
-                )}
-                <button
-                  onClick={() => sendMessage({ HostContinue: {} })}
-                  className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold"
-                >
-                  Continue to Next Question
-                </button>
-              </div>
-            )}
-
             {/* Game End State */}
             {gameState.state === "gameEnd" && (
               <div className="bg-gray-800 rounded-lg p-6 text-center">
