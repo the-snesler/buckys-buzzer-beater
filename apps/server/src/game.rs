@@ -862,6 +862,7 @@ mod tests {
         room.current_buzzer = Some(1);
 
         room.handle_message(&WsMsg::HostSkip {}, None);
+        room.handle_message(&WsMsg::HostContinue {}, None);
 
         assert!(
             !room.players[0].player.buzzed,
@@ -1050,11 +1051,7 @@ mod tests {
             GameState::GameEnd,
             "Should transition to GameEnd when no questions remain"
         );
-        assert_eq!(
-            room.winner,
-            Some(1),
-            "Winner should be determined"
-        );
+        assert_eq!(room.winner, Some(1), "Winner should be determined");
     }
 
     #[test]
