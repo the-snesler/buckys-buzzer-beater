@@ -865,8 +865,7 @@ mod tests {
         room.handle_message(&WsMsg::HostSkip {}, None);
 
         assert_eq!(
-            room.players[0].player.score,
-            100,
+            room.players[0].player.score, 100,
             "Skipping should not affect player scores"
         );
     }
