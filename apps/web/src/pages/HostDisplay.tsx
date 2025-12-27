@@ -164,7 +164,7 @@ export default function HostDisplay() {
                 ]?.value
               }
             </p>
-            <p className="text-5xl text-white text-center leading-relaxed mb-[4.25rem]">
+            <p className="text-5xl text-white text-center leading-relaxed">
               {
                 gameState.categories[gameState.currentQuestion[0]]?.questions[
                   gameState.currentQuestion[1]
@@ -223,28 +223,6 @@ export default function HostDisplay() {
                 </p>
               </div>
             )}
-          </div>
-        )}
-
-        {/* Answer Reveal State - Show the answer to the audience */}
-        {gameState.state === "answerReveal" && gameState.currentQuestion && (
-          <div className="flex flex-col items-center justify-center min-h-[80vh]">
-            <p className="text-xl text-red-200 mb-4">
-              {gameState.categories[gameState.currentQuestion[0]]?.title} - $
-              {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.value}
-            </p>
-
-            {/* Show the answer prominently */}
-            <div className="bg-white/20 outline outline-4 outline-white/40 rounded-2xl px-16 py-8 mb-8">
-              <p className="text-xl text-green-100 mb-2">Answer:</p>
-              <p className="text-5xl text-white font-bold text-center">
-                {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.answer}
-              </p>
-            </div>
-
-            <p className="text-2xl italic text-white text-center leading-relaxed mb-8">
-              {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
-            </p>
           </div>
         )}
 

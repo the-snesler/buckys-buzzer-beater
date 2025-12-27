@@ -256,8 +256,6 @@ impl Room {
 
             WsMsg::HostSkip {} => self.handle_host_skip(),
 
-            WsMsg::HostContinue {} => self.handle_host_continue(),
-
             WsMsg::Heartbeat { hbid, t_dohb_recv } => {
                 if let Some(sender_id) = sender_id
                     && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
@@ -332,13 +330,27 @@ impl Room {
 
         if correct {
             question.answered = true;
-            self.state = GameState::AnswerReveal;
+            self.current_question = None;
+            self.current_buzzer = None;
+            self.state = if self.has_remaining_questions() {
+                GameState::Selection
+            } else {
+                self.determine_winner();
+                GameState::GameEnd
+            };
         } else if any_can_buzz {
             self.current_buzzer = None;
             self.state = GameState::WaitingForBuzz;
         } else {
             question.answered = true;
-            self.state = GameState::AnswerReveal;
+            self.current_question = None;
+            self.current_buzzer = None;
+            self.state = if self.has_remaining_questions() {
+                GameState::Selection
+            } else {
+                self.determine_winner();
+                GameState::GameEnd
+            };
         }
 
         RoomResponse::broadcast_state(self.build_game_state_msg())
@@ -365,19 +377,11 @@ impl Room {
             question.answered = true;
         }
 
-        self.state = GameState::AnswerReveal;
-
-        RoomResponse::broadcast_state(self.build_game_state_msg())
-            .merge(self.build_all_player_states())
-    }
-
-    fn handle_host_continue(&mut self) -> RoomResponse {
-        tracing::info!("Host continuing from answer reveal");
-
         // Clear current question and buzzer
         self.current_question = None;
         self.current_buzzer = None;
 
+        // Reset all player buzz states
         for player in &mut self.players {
             player.player.buzzed = false;
         }
@@ -437,7 +441,6 @@ pub enum GameState {
     QuestionReading,
     Answer,
     WaitingForBuzz,
-    AnswerReveal,
     GameEnd,
 }
 
@@ -460,10 +463,6 @@ mod tests {
         room.categories[0].questions[0].answered = true;
 
         room.handle_message(&WsMsg::HostChecked { correct: true }, None);
-
-        assert_eq!(room.state, GameState::AnswerReveal);
-
-        room.handle_message(&WsMsg::HostContinue {}, None);
 
         assert_eq!(room.state, GameState::GameEnd);
         assert_eq!(room.winner, Some(1), "Player 1 should be winner");
@@ -685,7 +684,7 @@ mod tests {
                 },
                 correct: true,
                 expected_score: 200,
-                expected_state: GameState::AnswerReveal,
+                expected_state: GameState::Selection,
                 question_answered: true,
             },
             TestCase {
@@ -716,7 +715,7 @@ mod tests {
                 },
                 correct: false,
                 expected_score: -200,
-                expected_state: GameState::AnswerReveal,
+                expected_state: GameState::Selection,
                 question_answered: true,
             },
             TestCase {
@@ -730,7 +729,7 @@ mod tests {
                 },
                 correct: true,
                 expected_score: 400,
-                expected_state: GameState::AnswerReveal,
+                expected_state: GameState::GameEnd,
                 question_answered: true,
             },
         ];
@@ -782,11 +781,8 @@ mod tests {
             room.categories[0].questions[0].answered,
             "Skipped question should be marked as answered"
         );
-        assert_eq!(
-            room.state,
-            GameState::AnswerReveal,
-            "Should transition to AnswerReveal"
-        );
+        assert_eq!(room.current_question, None);
+        assert_eq!(room.current_buzzer, None);
     }
 
     #[test]
@@ -798,14 +794,6 @@ mod tests {
         room.current_question = Some((0, 0));
 
         room.handle_message(&WsMsg::HostSkip {}, None);
-
-        assert_eq!(
-            room.state,
-            GameState::AnswerReveal,
-            "Should first go to AnswerReveal"
-        );
-
-        room.handle_message(&WsMsg::HostContinue {}, None);
 
         assert_eq!(
             room.state,
@@ -828,14 +816,6 @@ mod tests {
         room.current_question = Some((0, 1)); // Last question
 
         room.handle_message(&WsMsg::HostSkip {}, None);
-
-        assert_eq!(
-            room.state,
-            GameState::AnswerReveal,
-            "Should first go to AnswerReveal"
-        );
-
-        room.handle_message(&WsMsg::HostContinue {}, None);
 
         assert_eq!(
             room.state,
@@ -909,183 +889,6 @@ mod tests {
             response.messages_to_host.len(),
             0,
             "Should return empty response when there's no current question"
-        );
-    }
-
-    #[test]
-    fn test_answer_reveal_after_correct() {
-        let mut room = create_test_room();
-        add_test_player(&mut room, 1, "Player1");
-
-        room.state = GameState::Answer;
-        room.current_question = Some((0, 0));
-        room.current_buzzer = Some(1);
-
-        // Host marks answer correct
-        room.handle_message(&WsMsg::HostChecked { correct: true }, None);
-
-        assert_eq!(
-            room.state,
-            GameState::AnswerReveal,
-            "Should transition to AnswerReveal after correct answer"
-        );
-        assert_eq!(room.players[0].player.score, 200, "Score should be updated");
-
-        // Host continues
-        room.handle_message(&WsMsg::HostContinue {}, None);
-
-        assert_eq!(
-            room.state,
-            GameState::Selection,
-            "Should transition to Selection after continue"
-        );
-        assert_eq!(
-            room.current_question, None,
-            "Current question should be cleared"
-        );
-        assert_eq!(
-            room.current_buzzer, None,
-            "Current buzzer should be cleared"
-        );
-    }
-
-    #[test]
-    fn test_answer_reveal_after_all_incorrect() {
-        let mut room = create_test_room();
-        add_test_player(&mut room, 1, "Player1");
-        add_test_player(&mut room, 2, "Player2");
-
-        room.state = GameState::Answer;
-        room.current_question = Some((0, 0));
-        room.current_buzzer = Some(1);
-        room.players[0].player.buzzed = true;
-        room.players[1].player.buzzed = true; // All players have buzzed
-
-        // Host marks answer incorrect
-        room.handle_message(&WsMsg::HostChecked { correct: false }, None);
-
-        assert_eq!(
-            room.state,
-            GameState::AnswerReveal,
-            "Should transition to AnswerReveal when all players buzzed incorrectly"
-        );
-        assert_eq!(
-            room.players[0].player.score, -200,
-            "Score should be deducted"
-        );
-
-        // Host continues
-        room.handle_message(&WsMsg::HostContinue {}, None);
-
-        assert_eq!(
-            room.state,
-            GameState::Selection,
-            "Should transition to Selection after continue"
-        );
-    }
-
-    #[test]
-    fn test_answer_reveal_after_skip() {
-        let mut room = create_test_room();
-        add_test_player(&mut room, 1, "Player1");
-
-        room.state = GameState::WaitingForBuzz;
-        room.current_question = Some((0, 0));
-        room.players[0].player.score = 100;
-
-        // Host skips question
-        room.handle_message(&WsMsg::HostSkip {}, None);
-
-        assert_eq!(
-            room.state,
-            GameState::AnswerReveal,
-            "Should transition to AnswerReveal after skip"
-        );
-        assert_eq!(
-            room.players[0].player.score, 100,
-            "Score should not change after skip"
-        );
-        assert!(
-            room.categories[0].questions[0].answered,
-            "Question should be marked as answered"
-        );
-
-        // Host continues
-        room.handle_message(&WsMsg::HostContinue {}, None);
-
-        assert_eq!(
-            room.state,
-            GameState::Selection,
-            "Should transition to Selection after continue"
-        );
-    }
-
-    #[test]
-    fn test_answer_reveal_to_game_end() {
-        let mut room = create_test_room();
-        add_test_player(&mut room, 1, "Winner");
-        add_test_player(&mut room, 2, "Loser");
-
-        room.players[0].player.score = 500;
-        room.players[1].player.score = 200;
-
-        room.state = GameState::Answer;
-        room.categories[0].questions[0].answered = true; // First question already answered
-        room.current_question = Some((0, 1)); // Last question
-        room.current_buzzer = Some(1);
-
-        // Host marks answer correct
-        room.handle_message(&WsMsg::HostChecked { correct: true }, None);
-
-        assert_eq!(
-            room.state,
-            GameState::AnswerReveal,
-            "Should transition to AnswerReveal"
-        );
-
-        // Host continues from last question
-        room.handle_message(&WsMsg::HostContinue {}, None);
-
-        assert_eq!(
-            room.state,
-            GameState::GameEnd,
-            "Should transition to GameEnd when no questions remain"
-        );
-        assert_eq!(
-            room.winner,
-            Some(1),
-            "Winner should be determined"
-        );
-    }
-
-    #[test]
-    fn test_incorrect_stays_in_waiting_for_buzz() {
-        let mut room = create_test_room();
-        add_test_player(&mut room, 1, "Player1");
-        add_test_player(&mut room, 2, "Player2");
-
-        room.state = GameState::Answer;
-        room.current_question = Some((0, 0));
-        room.current_buzzer = Some(1);
-        room.players[0].player.buzzed = true;
-        room.players[1].player.buzzed = false; // Player 2 hasn't buzzed yet
-
-        // Host marks answer incorrect
-        room.handle_message(&WsMsg::HostChecked { correct: false }, None);
-
-        assert_eq!(
-            room.state,
-            GameState::WaitingForBuzz,
-            "Should stay in WaitingForBuzz when more players can buzz"
-        );
-        assert_eq!(
-            room.current_buzzer, None,
-            "Current buzzer should be cleared"
-        );
-        assert_eq!(
-            room.current_question,
-            Some((0, 0)),
-            "Current question should remain"
         );
     }
 }
