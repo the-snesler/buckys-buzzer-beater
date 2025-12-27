@@ -55,6 +55,8 @@ pub enum WsMsg {
     },
     #[serde(alias = "HostSkip")]
     HostSkip {},
+    #[serde(alias = "HostContinue")]
+    HostContinue {},
 
     // Buzzer
     #[serde(alias = "BuzzEnable")]
