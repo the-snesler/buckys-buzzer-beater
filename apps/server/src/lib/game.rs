@@ -3,11 +3,12 @@ use std::{fmt, time::SystemTime};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PlayerEntry,
-    host::HostEntry,
-    player::{Player, PlayerId},
-    ws_msg::WsMsg,
+    host::HostEntry, net::connection::{HostToken, RoomCode}, player::{Player, PlayerId}, ws_msg::WsMsg, PlayerEntry
 };
+
+pub mod room;
+pub mod models;
+pub mod state;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Question {
@@ -25,8 +26,8 @@ pub struct Category {
 }
 
 pub struct Room {
-    pub code: String,
-    pub host_token: String,
+    pub code: RoomCode,
+    pub host_token: HostToken,
     pub state: GameState,
     pub host: Option<HostEntry>,
     pub players: Vec<PlayerEntry>,
@@ -106,7 +107,7 @@ impl RoomResponse {
 }
 
 impl Room {
-    pub fn new(code: String, host_token: String) -> Self {
+    pub fn new(code: RoomCode, host_token: HostToken) -> Self {
         Self {
             code,
             host_token,

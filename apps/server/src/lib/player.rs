@@ -8,7 +8,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio_mpmc::Sender;
 
-use crate::{ConnectionStatus, HeartbeatId, UnixMs, ws_msg::WsMsg};
+use crate::{net::connection::PlayerToken, ws_msg::WsMsg, ConnectionStatus, HeartbeatId, UnixMs};
 
 pub type PlayerId = u32;
 
@@ -18,7 +18,7 @@ pub struct Player {
     pub name: String,
     pub score: i32,
     pub buzzed: bool,
-    pub token: String,
+    pub token: PlayerToken,
 }
 
 pub struct PlayerEntry {
@@ -159,7 +159,7 @@ impl TrackedMessageTime {
 }
 
 impl Player {
-    pub fn new(pid: PlayerId, name: String, score: i32, buzzed: bool, token: String) -> Self {
+    pub fn new(pid: PlayerId, name: String, score: i32, buzzed: bool, token: PlayerToken) -> Self {
         Self {
             pid,
             name,
