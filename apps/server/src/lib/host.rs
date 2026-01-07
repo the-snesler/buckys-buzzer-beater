@@ -2,7 +2,7 @@ use std::fmt;
 
 use tokio_mpmc::Sender;
 
-use crate::{api::messages::GameEvent};
+use crate::api::messages::GameEvent;
 
 pub struct HostEntry {
     pub pid: u32,

@@ -1,12 +1,9 @@
-
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    api::messages::GameEvent, player::PlayerId
-};
+use crate::{api::messages::GameEvent, player::PlayerId};
 
-pub mod room;
 pub mod models;
+pub mod room;
 pub mod state;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -24,6 +21,7 @@ pub struct Category {
     pub questions: Vec<Question>,
 }
 
+#[derive(Clone, Debug)]
 pub struct RoomResponse {
     pub messages_to_host: Vec<GameEvent>,
     pub messages_to_players: Vec<GameEvent>,
