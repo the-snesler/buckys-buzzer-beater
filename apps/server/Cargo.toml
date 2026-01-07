@@ -5,11 +5,11 @@ edition = "2024"
 
 [lib]
 name = "madhacks2025"
-path = "src/lib.rs"
+path = "src/lib/lib.rs"
 
 [[bin]]
 name = "madhacks2025"
-path = "src/main.rs"
+path = "src/bin/main.rs"
 
 [dependencies]
 axum = { version = "0.8.7", features = ["ws"] }
