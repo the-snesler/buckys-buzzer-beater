@@ -39,11 +39,10 @@ pub enum AuthenticatedUser {
 /// This function only checks if the credentials are valid but does not register the user or update
 /// channels.
 pub fn perform_handshake(room: &Room, query: &WsQuery) -> anyhow::Result<AuthenticatedUser> {
-    if let Some(provided_token) = &query.token {
-        if provided_token.to_string() == room.host_token.to_string() {
+    if let Some(provided_token) = &query.token
+        && provided_token.to_string() == room.host_token.to_string() {
             return Ok(AuthenticatedUser::Host);
         }
-    }
 
     if let (Some(pid), Some(token)) = (query.player_id, &query.token) {
         let found = room
