@@ -1,11 +1,16 @@
-use std::{collections::HashMap, fmt::{self, Display}, str::FromStr, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio_mpmc::Sender;
 use uuid::Uuid;
 
-use crate::{api::messages::GameEvent, HeartbeatId, Player, TrackedMessageTime, UnixMs};
+use crate::{HeartbeatId, Player, TrackedMessageTime, UnixMs, api::messages::GameEvent};
 
 /// A unique identifier for a game room (e.g., "AFKRTWZ")
 ///
@@ -42,7 +47,6 @@ impl FromStr for RoomCode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(s.to_string()))
     }
-
 }
 
 impl Display for RoomCode {
@@ -242,4 +246,3 @@ pub enum ConnectionStatus {
     Connected,
     Disconnected,
 }
-

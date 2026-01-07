@@ -4,10 +4,13 @@ use anyhow::anyhow;
 use tokio_mpmc::Sender;
 
 use crate::{
+    AppState, HostEntry, Player, PlayerId,
     api::{
-        handlers::{perform_handshake, AuthenticatedUser, WsQuery},
+        handlers::{AuthenticatedUser, WsQuery, perform_handshake},
         messages::GameEvent,
-    }, game::{room::Room, GameState}, net::connection::{PlayerEntry, PlayerToken}, AppState, HostEntry, Player, PlayerId
+    },
+    game::{GameState, room::Room},
+    net::connection::{PlayerEntry, PlayerToken},
 };
 
 /// Performs authentication and sets up the session for a WebsocketConnection.
@@ -92,7 +95,10 @@ async fn register_new_player(
 ) -> anyhow::Result<PlayerId> {
     let new_id = (room.players.len() + 1) as u32;
     let token = PlayerToken::generate();
-    let player = PlayerEntry::new(Player::new(new_id, name, 0, false, token.clone()), tx.clone());
+    let player = PlayerEntry::new(
+        Player::new(new_id, name, 0, false, token.clone()),
+        tx.clone(),
+    );
     room.players.push(player);
 
     tx.send(GameEvent::NewPlayer { pid: new_id, token }).await?;

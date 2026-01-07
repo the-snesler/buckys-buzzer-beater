@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{game::room::Room, net::connection::{HostToken, PlayerToken}, PlayerId};
+use crate::{
+    PlayerId,
+    game::room::Room,
+    net::connection::{HostToken, PlayerToken},
+};
 
 #[derive(Deserialize, Debug)]
 pub struct WsQuery {
@@ -34,10 +38,7 @@ pub enum AuthenticatedUser {
 ///
 /// This function only checks if the credentials are valid but does not register the user or update
 /// channels.
-pub fn perform_handshake(
-    room: &Room,
-    query: &WsQuery,
-) -> anyhow::Result<AuthenticatedUser> {
+pub fn perform_handshake(room: &Room, query: &WsQuery) -> anyhow::Result<AuthenticatedUser> {
     if let Some(provided_token) = &query.token {
         if provided_token.to_string() == room.host_token.to_string() {
             return Ok(AuthenticatedUser::Host);
@@ -45,10 +46,11 @@ pub fn perform_handshake(
     }
 
     if let (Some(pid), Some(token)) = (query.player_id, &query.token) {
-        let found = room.players.iter().any(|p| {
-            p.player.pid == pid && p.player.token == *token
-        });
-         
+        let found = room
+            .players
+            .iter()
+            .any(|p| p.player.pid == pid && p.player.token == *token);
+
         if found {
             return Ok(AuthenticatedUser::ExistingPlayer { pid });
         } else {

@@ -1,10 +1,19 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use axum::{extract::{Path, State}, http::StatusCode, Json};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::{api::handlers::RoomParams, game::Category, net::connection::{HostToken, RoomCode}, AppState, Room};
+use crate::{
+    AppState, Room,
+    api::handlers::RoomParams,
+    game::Category,
+    net::connection::{HostToken, RoomCode},
+};
 
 #[tracing::instrument(skip(state, body))]
 pub async fn create_room(
@@ -96,4 +105,3 @@ pub async fn cpr_handler(
         }
     }
 }
-

@@ -13,12 +13,13 @@ use futures::FutureExt;
 use tokio::select;
 
 use crate::{
+    AppState,
     api::{
         handlers::{RoomParams, WsQuery},
         messages::{GameCommand, GameEvent},
-    }, game::RoomResponse, net::
-        ws::session::setup_session
-    , AppState
+    },
+    game::RoomResponse,
+    net::ws::session::setup_session,
 };
 
 pub async fn ws_upgrade_handler(
@@ -149,12 +150,7 @@ async fn parse_message(
 }
 
 /// Hanldes witness events for time-critical synchronization.
-async fn handle_witness(
-    state: &Arc<AppState>,
-    code: &str,
-    cmd: &GameCommand,
-    _player_id: u32,
-) {
+async fn handle_witness(state: &Arc<AppState>, code: &str, cmd: &GameCommand, _player_id: u32) {
     let room_map = state.room_map.lock().await;
     if let Some(room) = room_map.get(code) {
         let witness_event = match cmd {
@@ -169,11 +165,7 @@ async fn handle_witness(
 }
 
 /// Dispatches response messages to appropriate recipients.
-async fn dispatch_responses(
-    state: &Arc<AppState>,
-    code: &str,
-    response: RoomResponse,
-) {
+async fn dispatch_responses(state: &Arc<AppState>, code: &str, response: RoomResponse) {
     let room_map = state.room_map.lock().await;
     if let Some(room) = room_map.get(code) {
         if let Some(host) = &room.host {
