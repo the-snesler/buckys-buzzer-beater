@@ -1,3 +1,21 @@
+//! Madhacks 2025 Bucky's Buzzer Beater
+//!
+//! A real-time multiplayer game built with Axum and WebSockets.
+//!
+//! # Game Flow
+//!
+//! 1. **Room Creation**: Host creates a room via HTTP POST
+//! 2. **Player Joining**: Players connect via WebSocket with room code
+//! 3. **Game Play**: Host controls game flow, players buzz in to answer
+//! 4. **Scoring**: Points awarded/deducted based on answer correctness
+//!
+//! # Modules
+//! 
+//! - [`api`] - HTTP routes and WebSocket handlers
+//! - [`game`] - Game logic and state management
+//! - [`net`] - Networking connections and tokens
+//! - [`player`] - Player data structures
+
 pub mod api;
 pub mod game;
 pub mod host;
@@ -15,8 +33,8 @@ use axum::{
     Router,
     routing::{any, get, post},
 };
-pub use host::HostEntry;
-pub use player::*;
+use host::HostEntry;
+use player::*;
 use tokio::sync::Mutex;
 use tower_http::services::{ServeDir, ServeFile};
 

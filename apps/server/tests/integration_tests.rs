@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use common::*;
-use madhacks2025::{GameState, PlayerEntry, ws_msg::WsMsg};
+use madhacks2025::ws_msg::WsMsg;
 
 mod smoke_tests {
     use super::*;
@@ -68,6 +68,8 @@ mod smoke_tests {
 }
 
 mod gameplay_tests {
+    use madhacks2025::{game::GameState, net::connection::PlayerEntry};
+
     use super::*;
 
     #[tokio::test]
@@ -340,6 +342,15 @@ mod gameplay_tests {
         play_question(&mut host_ws, &mut player_ws, 0, 0, true).await;
 
         let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).expect("Could not find room");
+        println!("Room state: {:?}", room.state);
+        println!("Current buzzer: {:?}", room.current_buzzer);
+        println!("Number of players: {}", room.players.len());
+        if !room.players.is_empty() {
+            println!("Player 0 score: {}", room.players[0].player.score);
+            println!("Player 0 pid: {}", room.players[0].player.pid);
+            println!("Player 0 name: {}", room.players[0].player.name);
+        }
         let score = get_player_score(&room_map, &room_code, player_id);
         assert_eq!(score, 100, "Score should be 100 after correct answer");
 
@@ -826,7 +837,7 @@ mod gameplay_tests {
 mod room_cleanup {
     use std::sync::Arc;
 
-    use madhacks2025::{AppState, Room, cleanup_inactive_rooms};
+    use madhacks2025::{cleanup_inactive_rooms, game::room::Room, net::connection::{HostToken, RoomCode}, AppState};
 
     use super::*;
 
@@ -835,7 +846,7 @@ mod room_cleanup {
         let state = Arc::new(AppState::with_ttl(Duration::from_secs(60)));
         let mut room_map = state.room_map.lock().await;
 
-        let room = Room::new("TEST01".to_string(), "token".to_string());
+        let room = Room::new(RoomCode::from("TEST01".to_string()), HostToken::generate());
         room_map.insert("TEST01".to_string(), room);
         drop(room_map);
 
@@ -853,7 +864,7 @@ mod room_cleanup {
         let state = Arc::new(AppState::with_ttl(Duration::from_millis(100)));
         let mut room_map = state.room_map.lock().await;
 
-        let room = Room::new("TEST01".to_string(), "token".to_string());
+        let room = Room::new(RoomCode::from("TEST01".to_string()), HostToken::generate());
         room_map.insert("TEST01".to_string(), room);
         drop(room_map);
 
@@ -873,7 +884,7 @@ mod room_cleanup {
         let state = Arc::new(AppState::with_ttl(Duration::from_millis(100)));
         let mut room_map = state.room_map.lock().await;
 
-        let room = Room::new("TEST01".to_string(), "token".to_string());
+        let room = Room::new(RoomCode::from("TEST01".to_string()), HostToken::generate());
         room_map.insert("TEST01".to_string(), room);
         drop(room_map);
 
@@ -905,11 +916,11 @@ mod room_cleanup {
 
         room_map.insert(
             "ACTIVE".to_string(),
-            Room::new("ACTIVE".to_string(), "t1".to_string()),
+            Room::new(RoomCode::from("ACTIVE".to_string()), HostToken::generate()),
         );
         room_map.insert(
             "STALE1".to_string(),
-            Room::new("STALE1".to_string(), "t2".to_string()),
+            Room::new(RoomCode::from("STALE1".to_string()), HostToken::generate()),
         );
 
         // Wait a bit to allow STALE1 to expire before ACTIVE
