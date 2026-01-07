@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio_mpmc::Sender;
 use uuid::Uuid;
 
-use crate::{ws_msg::WsMsg, HeartbeatId, Player, TrackedMessageTime, UnixMs};
+use crate::{api::messages::GameEvent, HeartbeatId, Player, TrackedMessageTime, UnixMs};
 
 /// A unique identifier for a game room (e.g., "AFKRTWZ")
 ///
@@ -121,7 +121,7 @@ impl std::str::FromStr for PlayerToken {
 
 pub struct PlayerEntry {
     pub player: Player,
-    pub sender: Sender<WsMsg>,
+    pub sender: Sender<GameEvent>,
     pub status: ConnectionStatus,
     latencies: [u32; 5],
     times_doheartbeat: HashMap<HeartbeatId, TrackedMessageTime>,
@@ -142,7 +142,7 @@ impl fmt::Debug for PlayerEntry {
 }
 
 impl PlayerEntry {
-    pub fn new(player: Player, sender: Sender<WsMsg>) -> Self {
+    pub fn new(player: Player, sender: Sender<GameEvent>) -> Self {
         Self {
             player,
             sender,
@@ -230,7 +230,7 @@ impl PlayerEntry {
         let t_sent = Self::time_ms();
         let hbid = self.generate_hbid(t_sent);
         self.sender
-            .send(WsMsg::DoHeartbeat { hbid, t_sent })
+            .send(GameEvent::DoHeartbeat { hbid, t_sent })
             .await?;
         self.record_dohb(hbid, t_sent);
         Ok(())
