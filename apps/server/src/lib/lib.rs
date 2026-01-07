@@ -1,5 +1,7 @@
+pub mod api;
 pub mod game;
 pub mod host;
+pub mod net;
 pub mod player;
 pub mod ws_msg;
 
@@ -23,7 +25,6 @@ pub use game::{GameState, Room};
 pub use host::HostEntry;
 use http::StatusCode;
 pub use player::*;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_mpmc::channel;
@@ -31,18 +32,20 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use futures::{FutureExt, select};
 
-use crate::ws_msg::WsMsg;
+use crate::{net::connection::{HostToken, PlayerToken, RoomCode}, ws_msg::WsMsg};
 
 pub type HeartbeatId = u32;
 pub type UnixMs = u64; // # of milliseconds since unix epoch, or delta thereof
 
 #[derive(Deserialize)]
-struct WsQuery {
+pub struct WsQuery {
     #[serde(rename = "playerName")]
-    player_name: Option<String>, // only players include player_name
-    token: Option<String>, // only rejoining players include both token & player_id
+    pub player_name: Option<String>, // only players include player_name
+    pub token: Option<PlayerToken>, // only rejoining players include both token & player_id
+
     #[serde(rename = "playerID")]
-    player_id: Option<u32>,
+    pub player_id: Option<u32>,
+    pub host_token: Option<HostToken>,
 }
 
 pub struct AppState {
@@ -89,39 +92,6 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         )
 }
 
-fn generate_room_code() -> String {
-    const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
-    let mut rng = rand::rng();
-    (0..6)
-        .map(|_| {
-            let idx = rng.random_range(0..CHARSET.len());
-            CHARSET[idx] as char
-        })
-        .collect()
-}
-
-fn generate_host_token() -> String {
-    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = rand::rng();
-    (0..32)
-        .map(|_| {
-            let idx = rng.random_range(0..CHARSET.len());
-            CHARSET[idx] as char
-        })
-        .collect()
-}
-
-fn generate_player_token() -> String {
-    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = rand::rng();
-    (0..32)
-        .map(|_| {
-            let idx = rng.random_range(0..CHARSET.len());
-            CHARSET[idx] as char
-        })
-        .collect()
-}
-
 #[tracing::instrument(skip(state, body))]
 async fn create_room(
     State(state): State<Arc<AppState>>,
@@ -131,20 +101,20 @@ async fn create_room(
 
     // Generate a unique room code
     let code = loop {
-        let candidate = generate_room_code();
-        if !room_map.contains_key(&candidate) {
+        let candidate = RoomCode::generate();
+        if !room_map.contains_key(&candidate.to_string()) {
             break candidate;
         }
     };
 
-    let host_token = generate_host_token();
+    let host_token = HostToken::generate();
     let mut room = Room::new(code.clone(), host_token.clone());
 
     if let Some(categories) = body.categories {
         room.categories = categories;
     }
 
-    room_map.insert(code.clone(), room);
+    room_map.insert(code.to_string(), room);
 
     tracing::info!(room_code = %code, "Room created");
 
@@ -159,8 +129,8 @@ async fn create_room(
 
 #[derive(Serialize)]
 struct CreateRoomResponse {
-    room_code: String,
-    host_token: String,
+    room_code: RoomCode,
+    host_token: HostToken,
 }
 
 #[derive(Deserialize)]
@@ -186,6 +156,7 @@ async fn ws_upgrade_handler(
         token,
         player_name,
         player_id,
+        host_token,
     }): Query<WsQuery>,
 ) -> Response {
     {
@@ -203,6 +174,7 @@ async fn ws_upgrade_handler(
                 token,
                 player_name,
                 player_id,
+                host_token,
             },
         )
         .await
@@ -240,6 +212,7 @@ async fn ws_socket_handler(
         player_name,
         token,
         player_id,
+        host_token,
     }: WsQuery,
 ) -> anyhow::Result<()> {
     // for debugging
@@ -262,7 +235,7 @@ async fn ws_socket_handler(
             .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
         // println!("room: {:?}", room);
 
-        let is_host = token.as_ref() == Some(&room.host_token);
+        let is_host = host_token.as_ref() == Some(&room.host_token);
 
         tracing::Span::current().record("is_host", is_host);
 
@@ -320,7 +293,7 @@ async fn ws_socket_handler(
 
             tracing::Span::current().record("player_id", new_id);
 
-            let player_token = generate_player_token();
+            let player_token = PlayerToken::generate();
             let player = PlayerEntry::new(
                 Player::new(new_id, name.clone(), 0, false, player_token.clone()),
                 tx.clone(),

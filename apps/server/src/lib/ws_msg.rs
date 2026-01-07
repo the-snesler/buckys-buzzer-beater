@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    HeartbeatId, UnixMs,
-    game::{Category, GameState},
-    player::{Player, PlayerId},
+    game::{Category, GameState}, net::connection::PlayerToken, player::{Player, PlayerId}, HeartbeatId, UnixMs
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -14,7 +12,7 @@ pub enum WsMsg {
     PlayerList(Vec<Player>),
     NewPlayer {
         pid: PlayerId,
-        token: String,
+        token: PlayerToken,
     },
 
     // Game State Broadcast
