@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    player::PlayerId, ws_msg::WsMsg
+    api::messages::GameEvent, player::PlayerId
 };
 
 pub mod room;
@@ -25,9 +25,9 @@ pub struct Category {
 }
 
 pub struct RoomResponse {
-    pub messages_to_host: Vec<WsMsg>,
-    pub messages_to_players: Vec<WsMsg>,
-    pub messages_to_specific: Vec<(PlayerId, WsMsg)>,
+    pub messages_to_host: Vec<GameEvent>,
+    pub messages_to_players: Vec<GameEvent>,
+    pub messages_to_specific: Vec<(PlayerId, GameEvent)>,
 }
 
 impl Default for RoomResponse {
@@ -45,7 +45,7 @@ impl RoomResponse {
         }
     }
 
-    pub fn broadcast_state(state_msg: WsMsg) -> Self {
+    pub fn broadcast_state(state_msg: GameEvent) -> Self {
         Self {
             messages_to_host: vec![state_msg.clone()],
             messages_to_players: vec![state_msg],
@@ -53,7 +53,7 @@ impl RoomResponse {
         }
     }
 
-    pub fn to_host(msg: WsMsg) -> Self {
+    pub fn to_host(msg: GameEvent) -> Self {
         Self {
             messages_to_host: vec![msg],
             messages_to_players: vec![],
@@ -61,7 +61,7 @@ impl RoomResponse {
         }
     }
 
-    pub fn to_player(player_id: PlayerId, msg: WsMsg) -> Self {
+    pub fn to_player(player_id: PlayerId, msg: GameEvent) -> Self {
         Self {
             messages_to_host: vec![],
             messages_to_players: vec![],
@@ -85,6 +85,7 @@ pub enum GameState {
     Selection,
     QuestionReading,
     Answer,
+    AnswerReveal,
     WaitingForBuzz,
     GameEnd,
 }

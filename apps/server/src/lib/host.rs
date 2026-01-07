@@ -2,11 +2,11 @@ use std::fmt;
 
 use tokio_mpmc::Sender;
 
-use crate::ws_msg::WsMsg;
+use crate::{api::messages::GameEvent};
 
 pub struct HostEntry {
     pub pid: u32,
-    pub sender: Sender<WsMsg>,
+    pub sender: Sender<GameEvent>,
 }
 
 impl fmt::Debug for HostEntry {
@@ -19,7 +19,7 @@ impl fmt::Debug for HostEntry {
 }
 
 impl HostEntry {
-    pub fn new(pid: u32, sender: Sender<WsMsg>) -> Self {
+    pub fn new(pid: u32, sender: Sender<GameEvent>) -> Self {
         Self { pid, sender }
     }
 }

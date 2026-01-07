@@ -33,12 +33,12 @@ use futures::{FutureExt, select};
 
 use crate::{
     api::{
-        handlers::{RoomParams, WsQuery},
+        handlers::{AuthenticatedUser, RoomParams, WsQuery, perform_handshake},
+        messages::{GameCommand, GameEvent},
         routes::create_room,
     },
     game::room::Room,
     net::connection::{PlayerEntry, PlayerToken},
-    ws_msg::WsMsg,
 };
 
 pub type HeartbeatId = u32;
@@ -129,7 +129,7 @@ async fn ws_upgrade_handler(
 
 async fn send_player_list_to_host(host: &HostEntry, players: &[PlayerEntry]) -> anyhow::Result<()> {
     let list: Vec<Player> = players.iter().map(|entry| entry.player.clone()).collect();
-    let msg = WsMsg::PlayerList(list);
+    let msg = GameEvent::PlayerList(list);
     println!("send_player_list_to_host msg: {:?}", &msg);
     host.sender.send(msg).await?;
     Ok(())
@@ -148,219 +148,183 @@ async fn ws_socket_handler(
     mut ws: WebSocket,
     RoomParams { code }: RoomParams,
     state: Arc<AppState>,
-    WsQuery {
-        player_name,
-        token,
-        player_id,
-        host_token,
-    }: WsQuery,
+    query: WsQuery,
 ) -> anyhow::Result<()> {
     // for debugging
-    tracing::debug!(
-    room_code = %code,
-        ?token,
-        ?player_name,
-        ?player_id,
-        "WebSocket connection attempt"
-    );
-    let ch: tokio_mpmc::Receiver<WsMsg>;
-    let tx: tokio_mpmc::Sender<WsMsg>;
-    (tx, ch) = channel(20);
-    let mut connection_player_id: Option<u32> = player_id;
-    let tx_internal = tx.clone();
-    {
+    let (tx, mut rx): (
+        tokio_mpmc::Sender<GameEvent>,
+        tokio_mpmc::Receiver<GameEvent>,
+    ) = channel(20);
+    let auth = {
+        let room_map = state.room_map.lock().await;
+        let room = room_map
+            .get(&code)
+            .ok_or(anyhow::anyhow!("Room {} not found", &code))?;
+        perform_handshake(room, &query)?
+    };
+    let player_id = {
         let mut room_map = state.room_map.lock().await;
         let room = room_map
             .get_mut(&code)
-            .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-        // println!("room: {:?}", room);
+            .ok_or(anyhow::anyhow!("Room {} not found", &code))?;
 
-        let is_host = host_token.as_ref() == Some(&room.host_token);
-
-        tracing::Span::current().record("is_host", is_host);
-
-        if is_host {
-            let host = HostEntry::new(player_id.unwrap_or(0), tx.clone());
-            send_player_list_to_host(&host, &room.players).await?;
-
-            tracing::info!("Host connected");
-
-            if room.state != GameState::Start {
-                let players: Vec<Player> = room.players.iter().map(|e| e.player.clone()).collect();
-                let game_state_msg = WsMsg::GameState {
-                    state: room.state.clone(),
-                    categories: room.categories.clone(),
-                    players,
-                    current_question: room.current_question,
-                    current_buzzer: room.current_buzzer,
-                    winner: None,
-                };
-                tx.send(game_state_msg).await?;
-                tracing::debug!(state = ?room.state, "Sending game state to reconnecting host");
+        match auth {
+            AuthenticatedUser::Host => {
+                room.host = Some(HostEntry::new(0, tx.clone()));
+                let player_list =
+                    GameEvent::PlayerList(room.players.iter().map(|e| e.player.clone()).collect());
+                let _ = tx.send(player_list).await;
+                if room.state != GameState::Start {
+                    let _ = tx.send(room.build_game_state_msg()).await;
+                }
+                0 // host pid
             }
-
-            room.host = Some(host);
-        } else if let (Some(id), Some(_tok)) = (player_id, &token) {
-            if let Some(existing) = room.players.iter_mut().find(|p| p.player.pid == id) {
-                // Update existing player's send channel
-                existing.sender = tx.clone();
-
-                tracing::Span::current().record("player_id", id);
-
-                tracing::info!("Player reconnected");
-
-                let can_buzz = room.state == GameState::WaitingForBuzz;
-                let player_state_msg = WsMsg::PlayerState {
-                    pid: existing.player.pid,
-                    buzzed: existing.player.buzzed,
-                    score: existing.player.score,
-                    can_buzz,
-                };
-                tx.send(player_state_msg).await?;
-            } else {
-                return Err(anyhow!(
-                    "Player with ID {} could not be found in room {}",
-                    id,
-                    code
-                ));
+            AuthenticatedUser::ExistingPlayer { pid } => {
+                let p = room
+                    .players
+                    .iter_mut()
+                    .find(|p| p.player.pid == pid)
+                    .ok_or(anyhow::anyhow!("Player {} not found", pid))?;
+                p.sender = tx.clone();
+                if room.state != GameState::Start {
+                    let can_buzz = room.state == GameState::WaitingForBuzz && !p.player.buzzed;
+                    let player_state = GameEvent::PlayerState {
+                        pid: p.player.pid,
+                        buzzed: p.player.buzzed,
+                        score: p.player.score,
+                        can_buzz,
+                    };
+                    let _ = tx.send(player_state).await;
+                }
+                pid
             }
-            if let Some(host) = &room.host {
-                send_player_list_to_host(host, &room.players).await?;
+            AuthenticatedUser::NewPlayer { name } => {
+                let new_id = (room.players.len() + 1) as u32;
+                let token = PlayerToken::generate();
+                let player = PlayerEntry::new(
+                    Player::new(new_id, name, 0, false, token.clone()),
+                    tx.clone(),
+                );
+                room.players.push(player);
+
+                tx.send(GameEvent::NewPlayer { pid: new_id, token }).await?;
+                if let Some(host) = &room.host {
+                    let _ = send_player_list_to_host(host, &room.players).await;
+                }
+                new_id
             }
-        } else if let Some(name) = player_name {
-            let new_id: u32 = (room.players.len() + 1).try_into()?;
-            connection_player_id = Some(new_id);
-
-            tracing::Span::current().record("player_id", new_id);
-
-            let player_token = PlayerToken::generate();
-            let player = PlayerEntry::new(
-                Player::new(new_id, name.clone(), 0, false, player_token.clone()),
-                tx.clone(),
-            );
-            room.players.push(player);
-
-            tracing::info!(player_name = %name, "Player joined");
-
-            let new_player_msg = WsMsg::NewPlayer {
-                pid: new_id,
-                token: player_token,
-            };
-            tx.send(new_player_msg).await?;
-
-            if let Some(host) = &room.host {
-                send_player_list_to_host(host, &room.players).await?;
-            }
-        } else if let Some(tok) = &token {
-            if let Some(existing) = room.players.iter_mut().find(|p| p.player.token == *tok) {
-                connection_player_id = Some(existing.player.pid);
-
-                tracing::Span::current().record("player_id", existing.player.pid);
-
-                existing.sender = tx.clone();
-
-                let can_buzz = room.state == GameState::WaitingForBuzz;
-                let player_state_msg = WsMsg::PlayerState {
-                    pid: existing.player.pid,
-                    buzzed: existing.player.buzzed,
-                    score: existing.player.score,
-                    can_buzz,
-                };
-
-                tx.send(player_state_msg).await?;
-            } else {
-                return Err(anyhow!("Invalid player token"));
-            }
-        } else {
-            // Invalid connection
-            return Err(anyhow!(
-                "Invalid connection: must provide player_name (new player) or token (reconnect)"
-            ));
         }
-        //
-        // for player in &room.players {
-        //     println!("player: {}", player.player.pid);
-        // }
-    }
+    };
+
+    let self_tx = tx.clone();
+
     loop {
         select! {
-            res = ch.recv().fuse() => match res {
-                Ok(recv) => {
-                    let ser = serde_json::to_string(&recv)?;
-                    if let Some(r) = &recv {
-                        match &r {
-                            WsMsg::GameState { state, .. } => tracing::debug!(room_code = %code, ?state, "Sending GameState"),
-                            other => tracing::trace!(room_code = %code, "Sending message: {:?}", other),
-                        }
+            res = rx.recv().fuse() => {
+                match res {
+                    Ok(Some(msg)) => {
+                        let text = serde_json::to_string(&msg)?;
+                        ws.send(Message::Text(Utf8Bytes::from(text))).await?;
                     }
-                    ws.send(Message::Text(Utf8Bytes::from(ser))).await?;
-                },
-                Err(e) => Err(e)?
+                    _ => break, // Channel closed, exit loop
+                }
             },
-            msg_opt = ws.recv().fuse() => match msg_opt {
-                None => break,
-                Some(msg) => {
-                    let msg = if let Ok(msg) = msg {
-                        msg
-                    } else {
-                        // client disconnected
-                        Err(std::io::Error::new(
-                            std::io::ErrorKind::HostUnreachable,
-                            "websocket client disconnected in read",
-                        ))?
-                    };
-                    let msg: String = msg.into_text()?.to_string();
-                    // deser
-                    let msg: WsMsg = serde_json::from_str(&msg)?;
-                    // witness case, just for now
-                    if let m @ (WsMsg::StartGame {}
-                        | WsMsg::EndGame {}
-                        | WsMsg::BuzzEnable {}
-                        | WsMsg::BuzzDisable {}
-                        | WsMsg::Buzz {}) = msg.clone() {
-                        let witness = WsMsg::Witness { msg: Box::new(m) };
-                        let player_info: Vec<(u32, tokio_mpmc::Sender<WsMsg>, u64)> = {
-                            let room_map = state.room_map.lock().await;
-                            let room = room_map
-                                .get(&code)
-                                .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-                            room.players
-                                .iter()
-                                .map(|p| (p.player.pid, p.sender.clone(), p.latency().unwrap_or(0).into()))
-                                .collect()
-                        };
-                        let sender_player_id = connection_player_id;
-                        for (cpid, csender, lat) in player_info {
-                            let witnessc = witness.clone();
-                            let latc = lat;
-                            tokio::spawn(async move {
-                                if let Some(id) = sender_player_id
-                                    && cpid == id {
-                                        return Ok(());
-                                    }
-                                let s = csender;
-                                tokio::time::sleep(Duration::from_millis(500_u64.saturating_sub(latc))).await;
-                                s.send(witnessc).await
-                            });
+            msg = ws.recv().fuse() => {
+                let msg = match msg {
+                    Some(Ok(m)) => m,
+                    _ => break,
+                };
+
+                let cmd = match msg {
+                    Message::Text(text) => {
+                        let text_str = text.to_string();
+                        match serde_json::from_str::<GameCommand>(&text_str) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::warn!(
+                                    room_code = %code,
+                                    player_id = player_id,
+                                    error = %e,
+                                    "Failed to parse GameCommand"
+                                );
+                                continue;
+                            }
                         }
-                    };
-                    // heartbeat case
-                    if let WsMsg::Heartbeat { hbid, .. } = msg.clone() {
-                        tx_internal.send(WsMsg::GotHeartbeat { hbid }).await?;
-                        //continue;
                     }
-                    // everything else
+                    Message::Ping(data) => {
+                        let _ = ws.send(Message::Pong(data)).await;
+                        continue;
+                    }
+                    Message::Pong(_) => continue,
+                    Message::Close(_) => break,
+                    Message::Binary(_) => {
+                        tracing::warn!(room_code = %code, "Unexpected binary message");
+                        continue;
+                    }
+                };
+
+
+                if let GameCommand::Heartbeat { hbid, .. } = &cmd {
+                    let _ = self_tx.send(GameEvent::GotHeartbeat { hbid: *hbid }).await;
+                }
+
+                if cmd.should_witness() {
+                    let room_map = state.room_map.lock().await;
+                    if let Some(room) = room_map.get(&code) {
+                        let witness_event = match &cmd {
+                            GameCommand::HostReady => {
+                                Some(room.build_game_state_msg())
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(event) = witness_event {
+                            room.broadcast_witness(event).await;
+                        }
+                    }
+                }
+
+                let response = {
                     let mut room_map = state.room_map.lock().await;
-                    let room = room_map
-                        .get_mut(&code)
-                        .ok_or_else(|| anyhow!("Room {} does not exist", code))?;
-                    room.update(&msg, connection_player_id).await?;
-                    room.touch();
+                    if let Some(room) = room_map.get_mut(&code) {
+                        let resp = room.handle_command(&cmd, Some(player_id));
+                        room.touch();
+                        resp
+                    } else {
+                        return Err(anyhow!("Room lost"));
+                    }
+                };
+
+                {
+                    {
+                        let room_map = state.room_map.lock().await;
+                        if let Some(room) = room_map.get(&code) {
+                            // Send to host
+                            if let Some(host) = &room.host {
+                                for msg in response.messages_to_host {
+                                    let _ = host.sender.send(msg).await;
+                                }
+                            }
+
+                            // Broadcast to all players
+                            for msg in response.messages_to_players {
+                                for player in &room.players {
+                                    let _ = player.sender.send(msg.clone()).await;
+                                }
+                            }
+
+                            // Send to specific players (THIS WAS MISSING!)
+                            for (pid, msg) in response.messages_to_specific {
+                                if let Some(player) = room.players.iter().find(|p| p.player.pid == pid) {
+                                    let _ = player.sender.send(msg).await;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-    tracing::info!(?connection_player_id, "WebSocket connection closed");
     Ok(())
 }
 

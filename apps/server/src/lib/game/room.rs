@@ -1,7 +1,14 @@
-use std::{fmt, time::SystemTime};
+use std::{
+    fmt,
+    time::{Duration, SystemTime},
+};
 
-use crate::{game::{Category, RoomResponse}, net::connection::{HostToken, RoomCode}, ws_msg::WsMsg, GameState, HostEntry, Player, PlayerEntry, PlayerId};
-
+use crate::{
+    GameState, HostEntry, Player, PlayerEntry, PlayerId,
+    api::messages::{GameCommand, GameEvent},
+    game::{Category, RoomResponse},
+    net::connection::{HostToken, RoomCode},
+};
 
 pub struct Room {
     pub code: RoomCode,
@@ -94,10 +101,37 @@ impl Room {
         };
     }
 
-    fn build_game_state_msg(&self) -> WsMsg {
+    /// Broadcasts a witnessed event to all players with latency compensation
+    pub async fn broadcast_witness(&self, event: GameEvent) {
+        let max_latency = self
+            .players
+            .iter()
+            .filter_map(|p| p.latency().ok())
+            .max()
+            .unwrap_or(0);
+
+        let witness_event = GameEvent::Witness {
+            msg: Box::new(event),
+        };
+
+        for player in &self.players {
+            let player_latency = player.latency().unwrap_or(0) as u64;
+            let delay = Duration::from_millis(500u64.saturating_sub(player_latency));
+
+            let sender = player.sender.clone();
+            let event_clone = witness_event.clone();
+
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                let _ = sender.send(event_clone).await;
+            });
+        }
+    }
+
+    pub fn build_game_state_msg(&self) -> GameEvent {
         let players: Vec<Player> = self.players.iter().map(|e| e.player.clone()).collect();
 
-        WsMsg::GameState {
+        GameEvent::GameState {
             state: self.state.clone(),
             categories: self.categories.clone(),
             players,
@@ -107,11 +141,11 @@ impl Room {
         }
     }
 
-    fn build_player_state_msg(&self, player_id: PlayerId) -> Option<WsMsg> {
+    pub fn build_player_state_msg(&self, player_id: PlayerId) -> Option<GameEvent> {
         let player = self.players.iter().find(|p| p.player.pid == player_id)?;
         let can_buzz = self.state == GameState::WaitingForBuzz && !player.player.buzzed;
 
-        Some(WsMsg::PlayerState {
+        Some(GameEvent::PlayerState {
             pid: player.player.pid,
             buzzed: player.player.buzzed,
             score: player.player.score,
@@ -119,21 +153,22 @@ impl Room {
         })
     }
 
-    #[tracing::instrument(skip(self, msg), fields(room_code = %self.code))]
-    pub fn handle_message(&mut self, msg: &WsMsg, sender_id: Option<PlayerId>) -> RoomResponse {
-        match msg {
-            WsMsg::StartGame {} => {
-                tracing::info!("Game started");
+    pub fn handle_command(
+        &mut self,
+        cmd: &GameCommand,
+        sender_id: Option<PlayerId>,
+    ) -> RoomResponse {
+        match cmd {
+            GameCommand::StartGame => {
                 self.state = GameState::Selection;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
             }
 
-            WsMsg::HostChoice {
+            GameCommand::HostChoice {
                 category_index,
                 question_index,
             } => {
-                tracing::debug!(category_index, question_index, "Host selected question");
                 self.current_question = Some((*category_index, *question_index));
                 self.current_buzzer = None;
                 for player in &mut self.players {
@@ -144,7 +179,7 @@ impl Room {
                     .merge(self.build_all_player_states())
             }
 
-            WsMsg::Buzz {} => {
+            GameCommand::Buzz => {
                 if self.state == GameState::WaitingForBuzz
                     && let Some(player_id) = sender_id
                     && let Some(player_entry) =
@@ -160,7 +195,7 @@ impl Room {
                     self.current_buzzer = Some(player_id);
                     self.state = GameState::Answer;
 
-                    let buzzed_msg = WsMsg::Buzzed {
+                    let buzzed_msg = GameEvent::PlayerBuzzed {
                         pid: player_id,
                         name: player_entry.player.name.clone(),
                     };
@@ -171,16 +206,19 @@ impl Room {
                 }
                 RoomResponse::new()
             }
-
-            WsMsg::HostReady {} => {
+            GameCommand::HostReady => {
                 self.state = GameState::WaitingForBuzz;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
             }
 
-            WsMsg::HostChecked { correct } => self.handle_host_checked(*correct),
+            GameCommand::HostChecked { correct } => self.handle_host_checked(*correct),
 
-            WsMsg::Heartbeat { hbid, t_dohb_recv } => {
+            GameCommand::HostSkip => self.handle_host_skip(),
+
+            GameCommand::HostContinue => self.handle_host_continue(),
+
+            GameCommand::Heartbeat { hbid, t_dohb_recv } => {
                 if let Some(sender_id) = sender_id
                     && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
                 {
@@ -189,7 +227,7 @@ impl Room {
                 RoomResponse::new()
             }
 
-            WsMsg::LatencyOfHeartbeat { hbid, t_lat } => {
+            GameCommand::LatencyOfHeartbeat { hbid, t_lat } => {
                 if let Some(sender_id) = sender_id
                     && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
                 {
@@ -199,16 +237,67 @@ impl Room {
                 RoomResponse::new()
             }
 
-            WsMsg::EndGame {} => {
+            GameCommand::EndGame => {
                 self.determine_winner();
                 tracing::info!(?self.winner, "Game ended");
                 self.state = GameState::GameEnd;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
             }
-
-            _ => RoomResponse::new(),
         }
+    }
+
+    pub fn handle_host_skip(&mut self) -> RoomResponse {
+        let Some((cat_idx, q_idx)) = self.current_question else {
+            return RoomResponse::new();
+        };
+
+        tracing::info!(
+            category_index = cat_idx,
+            question_index = q_idx,
+            "Host skipped question"
+        );
+
+        if let Some(question) = self
+            .categories
+            .get_mut(cat_idx)
+            .and_then(|cat| cat.questions.get_mut(q_idx))
+        {
+            question.answered = true;
+        }
+
+        self.state = GameState::AnswerReveal;
+
+        RoomResponse::broadcast_state(self.build_game_state_msg())
+            .merge(self.build_all_player_states())
+    }
+
+    fn handle_host_continue(&mut self) -> RoomResponse {
+        tracing::info!("Host continuing from answer reveal");
+
+        self.current_question = None;
+        self.current_buzzer = None;
+
+        for player in &mut self.players {
+            player.player.buzzed = false;
+        }
+
+        self.state = if self.has_remaining_questions() {
+            GameState::Selection
+        } else {
+            // No more questions, determine the winner and end
+            self.determine_winner();
+            GameState::GameEnd
+        };
+
+        tracing::debug!(
+            next_state = ?self.state,
+            winner = ?self.winner,
+            "Transitioning after answer reveal"
+        );
+
+        RoomResponse::broadcast_state(self.build_game_state_msg())
+            .merge(self.build_all_player_states())
     }
 
     fn build_all_player_states(&self) -> RoomResponse {
@@ -281,37 +370,9 @@ impl Room {
             .merge(self.build_all_player_states())
     }
 
-    #[tracing::instrument(skip(self, msg), fields(room_code = %self.code))]
-    pub async fn update(&mut self, msg: &WsMsg, pid: Option<PlayerId>) -> anyhow::Result<()> {
-        tracing::trace!(?msg, ?pid, "Processing message");
-
-        let response = self.handle_message(msg, pid);
-
-        for msg in response.messages_to_host {
-            if let Some(host) = &self.host {
-                let _ = host.sender.send(msg).await;
-            }
-        }
-
-        for msg in response.messages_to_players {
-            for player in &self.players {
-                let _ = player.sender.send(msg.clone()).await;
-            }
-        }
-
-        for (player_id, msg) in response.messages_to_specific {
-            if let Some(player) = self.players.iter().find(|p| p.player.pid == player_id) {
-                let _ = player.sender.send(msg).await;
-            }
-        }
-
-        Ok(())
-    }
-
     fn has_remaining_questions(&self) -> bool {
         self.categories
             .iter()
             .any(|cat| cat.questions.iter().any(|q| !q.answered))
     }
 }
-
