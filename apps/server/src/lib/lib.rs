@@ -13,7 +13,7 @@ use std::{
 
 use anyhow::anyhow;
 use axum::{
-    Json, Router,
+    Router,
     extract::{
         Path, Query, State, WebSocketUpgrade,
         ws::{Message, Utf8Bytes, WebSocket},
@@ -21,32 +21,28 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, get, post},
 };
-pub use game::{GameState, Room};
+pub use game::GameState;
 pub use host::HostEntry;
 use http::StatusCode;
 pub use player::*;
-use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_mpmc::channel;
 use tower_http::services::{ServeDir, ServeFile};
 
 use futures::{FutureExt, select};
 
-use crate::{net::connection::{HostToken, PlayerToken, RoomCode}, ws_msg::WsMsg};
+use crate::{
+    api::{
+        handlers::{RoomParams, WsQuery},
+        routes::create_room,
+    },
+    game::room::Room,
+    net::connection::{PlayerEntry, PlayerToken},
+    ws_msg::WsMsg,
+};
 
 pub type HeartbeatId = u32;
 pub type UnixMs = u64; // # of milliseconds since unix epoch, or delta thereof
-
-#[derive(Deserialize)]
-pub struct WsQuery {
-    #[serde(rename = "playerName")]
-    pub player_name: Option<String>, // only players include player_name
-    pub token: Option<PlayerToken>, // only rejoining players include both token & player_id
-
-    #[serde(rename = "playerID")]
-    pub player_id: Option<u32>,
-    pub host_token: Option<HostToken>,
-}
 
 pub struct AppState {
     pub room_map: Mutex<HashMap<String, Room>>,
@@ -90,62 +86,6 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .fallback_service(
             ServeDir::new("public").not_found_service(ServeFile::new("public/index.html")),
         )
-}
-
-#[tracing::instrument(skip(state, body))]
-async fn create_room(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<CreateRoomRequest>,
-) -> (StatusCode, Json<CreateRoomResponse>) {
-    let mut room_map = state.room_map.lock().await;
-
-    // Generate a unique room code
-    let code = loop {
-        let candidate = RoomCode::generate();
-        if !room_map.contains_key(&candidate.to_string()) {
-            break candidate;
-        }
-    };
-
-    let host_token = HostToken::generate();
-    let mut room = Room::new(code.clone(), host_token.clone());
-
-    if let Some(categories) = body.categories {
-        room.categories = categories;
-    }
-
-    room_map.insert(code.to_string(), room);
-
-    tracing::info!(room_code = %code, "Room created");
-
-    (
-        StatusCode::CREATED,
-        Json(CreateRoomResponse {
-            room_code: code,
-            host_token,
-        }),
-    )
-}
-
-#[derive(Serialize)]
-struct CreateRoomResponse {
-    room_code: RoomCode,
-    host_token: HostToken,
-}
-
-#[derive(Deserialize)]
-struct CreateRoomRequest {
-    categories: Option<Vec<game::Category>>,
-}
-
-#[derive(Debug)]
-pub enum ConnectionStatus {
-    Connected,
-    Disconnected,
-}
-#[derive(Serialize, Deserialize, Debug)]
-struct RoomParams {
-    code: String,
 }
 
 async fn ws_upgrade_handler(
