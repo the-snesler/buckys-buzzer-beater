@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{game::{Category, GameState}, net::connection::PlayerToken, Player, PlayerId};
+use crate::{
+    Player, PlayerId,
+    game::{Category, GameState},
+    net::connection::PlayerToken,
+};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
@@ -35,10 +39,7 @@ pub enum GameCommand {
 impl GameCommand {
     /// Helper to identify if a command should be echoed to others via witness system.
     pub fn should_witness(&self) -> bool {
-        matches!(
-            self,
-            Self::HostReady
-        )
+        matches!(self, Self::HostReady)
     }
 }
 

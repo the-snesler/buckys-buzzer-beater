@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{net::connection::PlayerToken, UnixMs};
+use crate::{UnixMs, net::connection::PlayerToken};
 
 pub type PlayerId = u32;
 

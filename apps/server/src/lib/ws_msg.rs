@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    game::{Category, GameState}, net::connection::PlayerToken, player::{Player, PlayerId}, HeartbeatId, UnixMs
+    HeartbeatId, UnixMs,
+    game::{Category, GameState},
+    net::connection::PlayerToken,
+    player::{Player, PlayerId},
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
