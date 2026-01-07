@@ -4,9 +4,9 @@ use std::{
 };
 
 use crate::{
-    GameState, HostEntry, Player, PlayerEntry, PlayerId,
+    HostEntry, Player, PlayerEntry, PlayerId,
     api::messages::{GameCommand, GameEvent},
-    game::{Category, RoomResponse},
+    game::{Category, GameState, RoomResponse},
     net::connection::{HostToken, RoomCode},
 };
 
@@ -103,7 +103,7 @@ impl Room {
 
     /// Broadcasts a witnessed event to all players with latency compensation
     pub async fn broadcast_witness(&self, event: GameEvent) {
-        let max_latency = self
+        let _max_latency = self
             .players
             .iter()
             .filter_map(|p| p.latency().ok())

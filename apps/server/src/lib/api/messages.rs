@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{GameState, Player, PlayerId, game::Category, net::connection::PlayerToken};
+use crate::{game::{Category, GameState}, net::connection::PlayerToken, Player, PlayerId};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "type")]
