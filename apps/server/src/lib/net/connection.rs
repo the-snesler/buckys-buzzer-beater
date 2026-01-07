@@ -62,6 +62,19 @@ impl std::ops::Deref for RoomCode {
     }
 }
 
+/// A token used for WebSocket authentication.
+///
+/// This enum represents a token that could either be a host token or a player token.
+/// The actual type is determined during authentication.
+///
+/// # Examples
+#[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AuthToken {
+    Host(HostToken),
+    Player(PlayerToken),
+}
+
 /// A UUID used by the room creator to prove they are the Host.
 ///
 /// This token should be sent in the WebSocket handshake to authorize
@@ -77,6 +90,10 @@ impl HostToken {
 
     pub fn to_string(&self) -> String {
         self.0.to_string()
+    }
+
+    pub fn matches(&self, uuid: Uuid) -> bool {
+        self.0 == uuid
     }
 }
 
@@ -94,6 +111,12 @@ impl std::str::FromStr for HostToken {
     }
 }
 
+impl From<Uuid> for HostToken {
+    fn from(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+}
+
 /// A secret UUID assigned to each player upon joining a room.
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Serialize, Deserialize)]
 pub struct PlayerToken(Uuid);
@@ -106,6 +129,10 @@ impl PlayerToken {
 
     pub fn to_string(&self) -> String {
         self.0.to_string()
+    }
+
+    pub fn matches(&self, uuid: Uuid) -> bool {
+        self.0 == uuid
     }
 }
 
@@ -120,6 +147,12 @@ impl std::str::FromStr for PlayerToken {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(Uuid::parse_str(s)?))
+    }
+}
+
+impl From<Uuid> for PlayerToken {
+    fn from(uuid: Uuid) -> Self {
+        Self(uuid)
     }
 }
 

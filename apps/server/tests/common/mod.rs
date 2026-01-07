@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
+use madhacks2025::game::room::Room;
 use madhacks2025::game::{Category, Question};
 use tokio::sync::MutexGuard;
 use tokio::{net::TcpStream, task::JoinHandle};
@@ -10,7 +11,7 @@ use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use madhacks2025::ws_msg::WsMsg;
-use madhacks2025::{AppState, Room, build_app};
+use madhacks2025::{AppState, build_app};
 
 pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 

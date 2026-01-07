@@ -141,7 +141,7 @@ impl Room {
         }
     }
 
-    pub fn build_player_state_msg(&self, player_id: PlayerId) -> Option<GameEvent> {
+    fn build_player_state_msg(&self, player_id: PlayerId) -> Option<GameEvent> {
         let player = self.players.iter().find(|p| p.player.pid == player_id)?;
         let can_buzz = self.state == GameState::WaitingForBuzz && !player.player.buzzed;
 
@@ -374,5 +374,331 @@ impl Room {
         self.categories
             .iter()
             .any(|cat| cat.questions.iter().any(|q| !q.answered))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio_mpmc::channel;
+
+    use crate::{game::Question, net::connection::PlayerToken};
+
+    use super::*;
+
+    fn create_test_room() -> Room {
+        let mut room = Room::new(RoomCode::from("TEST".to_string()), HostToken::generate());
+
+        room.categories = vec![Category { 
+            title: "Test Category".to_string(),
+            questions: vec![
+                Question {
+                    question: "What is 2+2?".to_string(),
+                    answer: "4".to_string(),
+                    value: 200,
+                    answered: false,
+                },
+                Question {
+                    question: "What is 6 * 2?".to_string(),
+                    answer: "12".to_string(),
+                    value: 400,
+                    answered: false,
+                },
+            ],
+        }];
+
+        room
+    }
+
+    fn add_test_player(room: &mut Room, pid: u32, name: &str) {
+        let (tx, _rx) = channel(10);
+        let player = PlayerEntry::new(
+            Player::new(pid, name.to_string(), 0, false, PlayerToken::generate()),
+            tx,
+        );
+        room.players.push(player);
+    }
+
+    #[test]
+    fn test_winner_determined_on_game_end() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Winner");
+        add_test_player(&mut room, 2, "Loser");
+
+        room.players[0].player.score = 1000;
+        room.players[1].player.score = 500;
+
+        room.state = GameState::Answer;
+        room.current_question = Some((0, 1));
+        room.current_buzzer = Some(1);
+        room.categories[0].questions[0].answered = true;
+
+        room.handle_command(&GameCommand::HostChecked { correct: true }, None);
+
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(room.winner, Some(1), "Player 1 should be winner");
+    }
+
+    #[test]
+    fn test_tie_results_in_no_winner() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+        add_test_player(&mut room, 2, "Player2");
+
+        room.players[0].player.score = 1000;
+        room.players[1].player.score = 1000;
+
+        room.determine_winner();
+
+        assert_eq!(room.winner, None, "Tie should result in no winner");
+    }
+
+    #[test]
+    fn test_manual_end_game_determines_winner() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Winner");
+        add_test_player(&mut room, 2, "Loser");
+
+        room.players[0].player.score = 800;
+        room.players[1].player.score = 200;
+
+        room.handle_command(&GameCommand::EndGame {}, None);
+
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(room.winner, Some(1));
+    }
+
+    #[test]
+    fn test_negative_scores_winner() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "LeastBad");
+        add_test_player(&mut room, 2, "ReallyBad");
+
+        room.players[0].player.score = -200;
+        room.players[1].player.score = -1000;
+
+        room.determine_winner();
+
+        assert_eq!(
+            room.winner,
+            Some(1),
+            "Player with higher negative score wins"
+        );
+    }
+
+    #[test]
+    fn test_game_state_transitions() {
+        struct TestCase {
+            name: &'static str,
+            initial_state: GameState,
+            setup: fn(&mut Room),
+            command: GameCommand,
+            sender_id: Option<PlayerId>,
+            expected_state: GameState,
+            assertions: fn(&Room),
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "StartGame transitions to Selection",
+                initial_state: GameState::Start,
+                setup: |_| {},
+                command: GameCommand::StartGame {},
+                sender_id: None,
+                expected_state: GameState::Selection,
+                assertions: |_| {},
+            },
+            TestCase {
+                name: "HostChoice transitions to QuestionReading",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index: 0,
+                },
+                sender_id: None,
+                expected_state: GameState::QuestionReading,
+                assertions: |room| {
+                    assert_eq!(room.current_question, Some((0, 0)));
+                    assert_eq!(room.current_buzzer, None);
+                },
+            },
+            TestCase {
+                name: "HostChoice resets player buzz states",
+                initial_state: GameState::Selection,
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    add_test_player(room, 1, "Sam");
+                    room.players[0].player.buzzed = true;
+                    room.players[1].player.buzzed = true;
+                },
+                command: GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index: 0,
+                },
+                sender_id: None,
+                expected_state: GameState::QuestionReading,
+                assertions: |room| {
+                    assert!(!room.players[0].player.buzzed);
+                    assert!(!room.players[1].player.buzzed);
+                },
+            },
+            TestCase {
+                name: "HostReady transitions to WaitingForBuzz",
+                initial_state: GameState::QuestionReading,
+                setup: |_| {},
+                command: GameCommand::HostReady {},
+                sender_id: None,
+                expected_state: GameState::WaitingForBuzz,
+                assertions: |_| {},
+            },
+            TestCase {
+                name: "Player buzz transitions to Answer",
+                initial_state: GameState::WaitingForBuzz,
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                },
+                command: GameCommand::Buzz {},
+                sender_id: Some(1),
+                expected_state: GameState::Answer,
+                assertions: |room| {
+                    assert_eq!(room.current_buzzer, Some(1));
+                    assert!(room.players[0].player.buzzed);
+                },
+            },
+            TestCase {
+                name: "Player cannot buzz twice",
+                initial_state: GameState::WaitingForBuzz,
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    room.players[0].player.buzzed = true;
+                },
+                command: GameCommand::Buzz {},
+                sender_id: Some(1),
+                expected_state: GameState::WaitingForBuzz,
+                assertions: |room| {
+                    assert_eq!(room.current_buzzer, None);
+                },
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = create_test_room();
+            room.state = tc.initial_state;
+            (tc.setup)(&mut room);
+
+            room.handle_command(&tc.command, tc.sender_id);
+
+            assert_eq!(
+                room.state, tc.expected_state,
+                "Test case failed: {}",
+                tc.name
+            );
+            (tc.assertions)(&room)
+        }
+    }
+
+    #[test]
+    fn test_scoring() {
+        struct TestCase {
+            name: &'static str,
+            setup: fn(&mut Room),
+            correct: bool,
+            expected_score: i32,
+            expected_state: GameState,
+            question_answered: bool,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Correct answer awards points",
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    room.state = GameState::Answer;
+                    room.current_question = Some((0, 0));
+                    room.current_buzzer = Some(1);
+                },
+                correct: true,
+                expected_score: 200,
+                expected_state: GameState::Selection,
+                question_answered: true,
+            },
+            TestCase {
+                name: "Incorrect answer deducts points",
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    add_test_player(room, 2, "Sam");
+                    room.state = GameState::Answer;
+                    room.current_question = Some((0, 0));
+                    room.current_buzzer = Some(1);
+                    room.players[0].player.buzzed = true;
+                },
+                correct: false,
+                expected_score: -200,
+                expected_state: GameState::WaitingForBuzz,
+                question_answered: false,
+            },
+            TestCase {
+                name: "All players wrong marks question answered",
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    add_test_player(room, 2, "Sam");
+                    room.state = GameState::Answer;
+                    room.current_question = Some((0, 0));
+                    room.current_buzzer = Some(1);
+                    room.players[0].player.buzzed = true;
+                    room.players[1].player.buzzed = true;
+                },
+                correct: false,
+                expected_score: -200,
+                expected_state: GameState::Selection,
+                question_answered: true,
+            },
+            TestCase {
+                name: "Game ends when no questions remain",
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    room.state = GameState::Answer;
+                    room.categories[0].questions[0].answered = true;
+                    room.current_question = Some((0, 1));
+                    room.current_buzzer = Some(1);
+                },
+                correct: true,
+                expected_score: 400,
+                expected_state: GameState::GameEnd,
+                question_answered: true,
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = create_test_room();
+            (tc.setup)(&mut room);
+
+            let (cat_idx, q_idx) = room
+                .current_question
+                .expect("Failed to get current question");
+
+            room.handle_command(
+                &GameCommand::HostChecked {
+                    correct: tc.correct,
+                },
+                None,
+            );
+
+            assert_eq!(
+                room.players[0].player.score, tc.expected_score,
+                "Test case failed (score): {}",
+                tc.name
+            );
+            assert_eq!(
+                room.state, tc.expected_state,
+                "Test case failed (state): {}",
+                tc.name
+            );
+            assert_eq!(
+                room.categories[cat_idx].questions[q_idx].answered, tc.question_answered,
+                "Test case failed (answered): {}",
+                tc.name
+            );
+        }
     }
 }
