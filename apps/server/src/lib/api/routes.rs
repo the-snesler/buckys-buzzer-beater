@@ -66,6 +66,7 @@ pub async fn cpr_handler(
     State(state): State<Arc<AppState>>,
     Path(rp @ RoomParams { .. }): Path<RoomParams>,
 ) -> String {
+    tracing::info!("cpr");
     let code = rp.code;
     let res = {
         let mut room_map = state.room_map.lock().await;

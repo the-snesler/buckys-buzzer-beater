@@ -28,6 +28,7 @@ pub async fn ws_upgrade_handler(
     Path(rp @ RoomParams { .. }): Path<RoomParams>,
     Query(query): Query<WsQuery>,
 ) -> Response {
+    tracing::info!("upgrading ws");
     {
         let room_map = state.room_map.lock().await;
         if !room_map.contains_key(&rp.code) {
@@ -62,6 +63,7 @@ pub async fn ws_socket_handler(
 ) -> anyhow::Result<()> {
     let (tx, rx) = tokio_mpmc::channel(20);
 
+    tracing::info!("setting up session");
     let player_id = setup_session(&state, &code, &query, tx.clone()).await?;
 
     let self_tx = tx.clone();
@@ -78,6 +80,7 @@ pub async fn ws_socket_handler(
                 }
             },
             msg = ws.recv().fuse() => {
+                tracing::info!("WebSocket handler message {:?}", msg);
                 let msg = match msg {
                     Some(Ok(m)) => m,
                     _ => break,
@@ -110,6 +113,7 @@ pub async fn ws_socket_handler(
             }
         }
     }
+    tracing::info!("WebSocket handler ending normally for player {}", player_id);
     Ok(())
 }
 
@@ -166,9 +170,20 @@ async fn handle_witness(state: &Arc<AppState>, code: &str, cmd: &GameCommand, _p
 
 /// Dispatches response messages to appropriate recipients.
 async fn dispatch_responses(state: &Arc<AppState>, code: &str, response: RoomResponse) {
+    tracing::debug!(
+        "Dispatching responses: {} to host, {} broadcast, {} specific",
+        response.messages_to_host.len(),
+        response.messages_to_players.len(),
+        response.messages_to_specific.len()
+    );
+
     let room_map = state.room_map.lock().await;
     if let Some(room) = room_map.get(code) {
         if let Some(host) = &room.host {
+            tracing::debug!(
+                "Sending {} messages to host",
+                response.messages_to_host.len()
+            );
             for msg in response.messages_to_host {
                 let _ = host.sender.send(msg).await;
             }

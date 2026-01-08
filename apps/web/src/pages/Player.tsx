@@ -47,10 +47,13 @@ export default function Player() {
           const gameState = payload as {
             state: String;
           };
+          if (gameState.state !== "start") {
+            setGameStarted(true);
+          }
           if (gameState.state === "waitingForBuzz") {
             setCanBuzz(true);
             setHasBuzzed(false);
-          } else if (gameState.state === "selection") {
+          } else if (gameState.state === "selection" || gameState.state === "answerReveal") {
             setCanBuzz(false);
             setHasBuzzed(false);
           } else {
@@ -91,7 +94,7 @@ export default function Player() {
 
   const handleBuzz = () => {
     if (canBuzz && !hasBuzzed) {
-      sendMessage({ Buzz: {} });
+      sendMessage({ type: "Buzz" });
       setHasBuzzed(true);
     }
   };

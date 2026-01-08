@@ -10,7 +10,7 @@ use tokio::{net::TcpStream, task::JoinHandle};
 use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
-use madhacks2025::ws_msg::WsMsg;
+use madhacks2025::api::messages::{GameCommand, GameEvent};
 use madhacks2025::{AppState, build_app};
 
 pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -58,18 +58,18 @@ pub async fn connect_ws_client(port: u16, room_code: &str, query_params: &str) -
     ws_stream
 }
 
-/// Send a message and receive all response (with timeout)
+/// Send a command and receive all response (with timeout)
 ///
 /// # Arguments
 /// * `ws` - WebSocket stream
-/// * `msg` - Message to send
+/// * `cmd` - GameCommand to send
 ///
 /// # Returns
-/// Vec of all received messages within timeout period (100ms)
-pub async fn send_msg_and_recv_all(ws: &mut WsStream, msg: &WsMsg) -> Vec<WsMsg> {
+/// Vec of all received events within timeout period (100ms)
+pub async fn send_cmd_and_recv_all(ws: &mut WsStream, cmd: &GameCommand) -> Vec<GameEvent> {
     use tokio_tungstenite::tungstenite::Message;
 
-    let json = serde_json::to_string(msg).expect("Failed to serialize");
+    let json = serde_json::to_string(cmd).expect("Failed to serialize");
     ws.send(Message::Text(Utf8Bytes::from(json)))
         .await
         .expect("Failed to send message");
@@ -87,7 +87,7 @@ pub async fn send_msg_and_recv_all(ws: &mut WsStream, msg: &WsMsg) -> Vec<WsMsg>
 ///
 /// # Returns
 /// Vec of all received messages
-pub async fn recv_msgs(ws: &mut WsStream) -> Vec<WsMsg> {
+pub async fn recv_msgs(ws: &mut WsStream) -> Vec<GameEvent> {
     use tokio_tungstenite::tungstenite::Message;
 
     let mut received = Vec::new();
@@ -95,9 +95,9 @@ pub async fn recv_msgs(ws: &mut WsStream) -> Vec<WsMsg> {
 
     loop {
         match tokio::time::timeout(timeout, ws.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<WsMsg>(&text) {
+            Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<GameEvent>(&text) {
                 Ok(parsed) => received.push(parsed),
-                Err(e) => panic!("Failed to parse WsMsg: {}. Text: {}", e, text),
+                Err(e) => panic!("Failed to parse GameEvent: {}. Text: {}", e, text),
             },
             Ok(Some(Ok(_))) => {
                 // Ignore non-text messages
@@ -170,7 +170,7 @@ pub async fn add_player(port: u16, room_code: &str, name: &str) -> (WsStream, u3
     let player_id = msgs
         .iter()
         .find_map(|m| {
-            if let WsMsg::NewPlayer { pid, .. } = m {
+            if let GameEvent::NewPlayer { pid, .. } = m {
                 Some(*pid)
             } else {
                 None
@@ -188,9 +188,9 @@ pub async fn play_question(
     q_idx: usize,
     correct: bool,
 ) {
-    send_msg_and_recv_all(
+    send_cmd_and_recv_all(
         host_ws,
-        &WsMsg::HostChoice {
+        &GameCommand::HostChoice {
             category_index: c_idx,
             question_index: q_idx,
         },
@@ -199,15 +199,15 @@ pub async fn play_question(
     let _ = recv_msgs(player_ws).await;
 
     // Host starts question
-    send_msg_and_recv_all(host_ws, &WsMsg::HostReady {}).await;
+    send_cmd_and_recv_all(host_ws, &GameCommand::HostReady).await;
     let _ = recv_msgs(player_ws).await;
 
     // Player buzz
-    send_msg_and_recv_all(player_ws, &WsMsg::Buzz {}).await;
+    send_cmd_and_recv_all(player_ws, &GameCommand::Buzz).await;
     let _ = recv_msgs(host_ws).await;
 
     // Host checks answer
-    send_msg_and_recv_all(host_ws, &WsMsg::HostChecked { correct }).await;
+    send_cmd_and_recv_all(host_ws, &GameCommand::HostChecked { correct }).await;
     let _ = recv_msgs(player_ws).await;
 }
 
@@ -228,7 +228,7 @@ pub fn get_player_score(
 
 /// Start game and consume initial messages
 pub async fn start_game(host_ws: &mut WsStream, player_ws_list: &mut [&mut WsStream]) {
-    send_msg_and_recv_all(host_ws, &WsMsg::StartGame {}).await;
+    send_cmd_and_recv_all(host_ws, &GameCommand::StartGame).await;
 
     for player_ws in player_ws_list {
         let _ = recv_msgs(player_ws).await;

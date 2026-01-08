@@ -30,6 +30,7 @@ interface GameState {
 }
 
 export default function Host() {
+  console.log("Host mounted", new Date().toISOString());
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
   const [playerList, setPlayerList] = useState<PlayerState[]>([]);
@@ -95,6 +96,7 @@ export default function Host() {
 
       switch (type) {
         case "PlayerList":
+          console.log("Received PlayerList update:", payload);
           setPlayerList(payload as PlayerState[]);
           break;
         case "GameState":
@@ -180,7 +182,7 @@ export default function Host() {
                         <button
                           key={qIdx}
                           disabled={question.answered}
-                          onClick={() => sendMessage({ HostChoice: { categoryIndex: catIdx, questionIndex: qIdx } })}
+                          onClick={() => sendMessage({ type: "HostChoice", categoryIndex: catIdx, questionIndex: qIdx })}
                           className={`w-full py-4 rounded font-bold text-lg ${
                             question.answered
                               ? "bg-gray-700 text-gray-500 cursor-not-allowed"
@@ -207,7 +209,7 @@ export default function Host() {
                   {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
                 </p>
                 <button
-                  onClick={() => sendMessage({ HostReady: {} })}
+                  onClick={() => sendMessage({ type: "HostReady" })}
                   className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 text-lg font-semibold"
                 >
                   Open Buzzing
@@ -253,13 +255,13 @@ export default function Host() {
                 )}
                 <div className="flex gap-4 justify-center">
                   <button
-                    onClick={() => sendMessage({ HostChecked: { correct: true } })}
+                    onClick={() => sendMessage({ type: "HostChecked", correct: true })}
                     className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 text-lg font-semibold"
                   >
                     Correct
                   </button>
                   <button
-                    onClick={() => sendMessage({ HostChecked: { correct: false } })}
+                    onClick={() => sendMessage({ type: "HostChecked", correct: false })}
                     className="px-8 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 text-lg font-semibold"
                   >
                     Incorrect
@@ -350,7 +352,7 @@ export default function Host() {
               )}
               {playerList.length >= 1 && (
                 <button
-                  onClick={() => sendMessage({ StartGame: {} })}
+                  onClick={() => sendMessage({ type: "StartGame" })}
                   className="mt-6 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
                 >
                   Start Game
