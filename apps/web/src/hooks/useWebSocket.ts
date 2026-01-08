@@ -74,17 +74,19 @@ export function useWebSocket({
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data) as NetworkMessage;
+        console.log("Received message:", message);
         const [type, payload] = Object.entries(message)[0];
         if (type === "DoHeartbeat") {
           const t_dohb_recv = Date.now();
-          ws.send(JSON.stringify({ Heartbeat: { t_dohb_recv } }));
+          const hbid = (payload as any).hbid;
+          ws.send(JSON.stringify({ type: "Heartbeat", hbid, tDohbRecv: t_dohb_recv }));
           lastHeartbeatRef.current = t_dohb_recv;
           return;
         }
         if (type === "GotHeartbeat") {
           const hbid = (payload as any).hbid;
           const t_lat = Date.now() - lastHeartbeatRef.current;
-          ws.send(JSON.stringify({ LatencyOfHeartbeat: { hbid, t_lat } }));
+          ws.send(JSON.stringify({ type: "LatencyOfHeartbeat", hbid, tLat: t_lat }));
           return;
         }
         onMessageRef.current(message);

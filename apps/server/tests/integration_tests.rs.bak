@@ -196,13 +196,13 @@ mod gameplay_tests {
         send_cmd_and_recv_all(&mut player_ws, &GameCommand::Buzz {}).await;
         let host_buzz = recv_msgs(&mut host_ws).await;
 
-        let buzz_notification = host_buzz.iter().find(|m| matches!(m, GameEvent::PlayerBuzzed { .. }));
+        let buzz_notification = host_buzz.iter().find(|m| matches!(m, GameEvent::Buzzed { .. }));
         assert!(
             buzz_notification.is_some(),
             "Host should receive PlayerBuzzed"
         );
 
-        if let Some(GameEvent::PlayerBuzzed { pid, .. }) = buzz_notification {
+        if let Some(GameEvent::Buzzed { pid, .. }) = buzz_notification {
             assert_eq!(*pid, player_id, "Correct player buzzed");
         }
 
@@ -604,14 +604,14 @@ mod gameplay_tests {
         let host_msgs = recv_msgs(&mut host_ws).await;
         let buzz_count = host_msgs
             .iter()
-            .filter(|m| matches!(m, GameEvent::PlayerBuzzed { .. }))
+            .filter(|m| matches!(m, GameEvent::Buzzed { .. }))
             .count();
         assert_eq!(buzz_count, 1, "Host should receive exactly one buzz");
 
         let buzzed_player = host_msgs
             .iter()
             .find_map(|m| {
-                if let GameEvent::PlayerBuzzed { pid, .. } = m {
+                if let GameEvent::Buzzed { pid, .. } = m {
                     Some(*pid)
                 } else {
                     None

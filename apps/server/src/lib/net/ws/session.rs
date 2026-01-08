@@ -47,10 +47,12 @@ pub async fn setup_session(
 
 /// Registers a host connection
 async fn register_host(room: &mut Room, tx: Sender<GameEvent>) -> anyhow::Result<PlayerId> {
+    tracing::info!("Registering host for room {}", room.code);
     room.host = Some(HostEntry::new(0, tx.clone()));
 
     let player_list =
         GameEvent::PlayerList(room.players.iter().map(|e| e.player.clone()).collect());
+    tracing::info!("Sending player list to host: {} players", room.players.len());
     let _ = tx.send(player_list).await;
 
     if room.state != GameState::Start {
@@ -74,15 +76,19 @@ async fn reconnect_player(
 
     p.sender = tx.clone();
 
+    // Always send player state on reconnect
+    let can_buzz = room.state == GameState::WaitingForBuzz && !p.player.buzzed;
+    let player_state = GameEvent::PlayerState {
+        pid: p.player.pid,
+        buzzed: p.player.buzzed,
+        score: p.player.score,
+        can_buzz,
+    };
+    let _ = tx.send(player_state).await;
+
+    // Also send game state if game has started
     if room.state != GameState::Start {
-        let can_buzz = room.state == GameState::WaitingForBuzz && !p.player.buzzed;
-        let player_state = GameEvent::PlayerState {
-            pid: p.player.pid,
-            buzzed: p.player.buzzed,
-            score: p.player.score,
-            can_buzz,
-        };
-        let _ = tx.send(player_state).await;
+        let _ = tx.send(room.build_game_state_msg()).await;
     }
     Ok(pid)
 }
@@ -93,13 +99,16 @@ async fn register_new_player(
     name: String,
     tx: Sender<GameEvent>,
 ) -> anyhow::Result<PlayerId> {
+    tracing::info!("Registering new player '{}' in room {}", name, room.code);
     let new_id = (room.players.len() + 1) as u32;
     let token = PlayerToken::generate();
     let player = PlayerEntry::new(
         Player::new(new_id, name, 0, false, token.clone()),
         tx.clone(),
     );
+    tracing::info!("Broadcasting new player {} to {} existing players and host", &player.player.pid, room.players.len());
     room.players.push(player);
+
 
     tx.send(GameEvent::NewPlayer { pid: new_id, token }).await?;
 

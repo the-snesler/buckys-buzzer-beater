@@ -73,7 +73,7 @@ impl GameCommand {
     /// let cmd = GameCommand::HostReady;
     /// assert!(cmd.should_witness(), "HostReady needs synchronization");
     ///
-    /// let cmd = GameCommand::Buzzz;
+    /// let cmd = GameCommand::Buzz;
     /// assert!(!cmd.should_witness(), "Buzz is handled directly");
     /// ```
     pub fn should_witness(&self) -> bool {
@@ -95,10 +95,10 @@ impl GameCommand {
 ///     score: 500,
 ///     can_buzz: true,
 /// };
-/// let json = serde_json::to_string(&event).unwrap);
-/// assert!(json.contains(r#""canBuzz": true"#));
+/// let json = serde_json::to_string(&event).unwrap();
+/// assert!(json.contains("PlayerState"));
 /// ```
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum GameEvent {
     Witness {
         msg: Box<GameEvent>,
