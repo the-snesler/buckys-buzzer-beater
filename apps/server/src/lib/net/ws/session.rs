@@ -111,6 +111,32 @@ async fn register_new_player(
 
 
     tx.send(GameEvent::NewPlayer { pid: new_id, token }).await?;
+    let can_buzz = room.state == GameState::WaitingForBuzz;
+    let player_state = GameEvent::PlayerState {
+        pid: new_id,
+        buzzed: false,
+        score: 0,
+        can_buzz,
+    };
+    let _ = tx.send(player_state).await;
+
+    if room.state != GameState::Start {
+        let _ = tx.send(room.build_game_state_msg()).await;
+
+        let game_state = room.build_game_state_msg();
+        if let Some(host) = &room.host {
+            let _ = host.sender.send(game_state.clone()).await;
+        }
+        for player in &room.players {
+            if player.player.pid != new_id {
+                let _ = player.sender.send(game_state.clone()).await;
+            }
+        }
+    } else {
+        if let Some(host) = &room.host {
+            let _ = send_player_list_to_host(host, &room.players).await;
+        }
+    }
 
     if let Some(host) = &room.host {
         let _ = send_player_list_to_host(host, &room.players).await;
