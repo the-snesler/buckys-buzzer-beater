@@ -214,6 +214,12 @@ export default function Host() {
                 >
                   Open Buzzing
                 </button>
+                <button
+                  onClick={() => sendMessage({ type: "HostSkip" })}
+                  className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
+                >
+                  Skip Question
+                </button>
               </div>
             )}
 
@@ -229,6 +235,12 @@ export default function Host() {
                 </p>
                 <div className="text-center">
                   <p className="text-2xl text-green-400 animate-pulse">Waiting for buzz...</p>
+                  <button
+                    onClick={() => sendMessage({ type: "HostSkip" })}
+                    className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
+                  >
+                    Skip Question
+                  </button>
                 </div>
               </div>
             )}
@@ -265,6 +277,32 @@ export default function Host() {
                     className="px-8 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 text-lg font-semibold"
                   >
                     Incorrect
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Answer Reveal State */}
+            {gameState.state === "answerReveal" && gameState.currentQuestion && (
+              <div className="bg-gray-800 rounded-lg p-6">
+                <h2 className="text-xl font-semibold text-yellow-400 mb-2">
+                  {gameState.categories[gameState.currentQuestion[0]]?.title} - $
+                  {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.value}
+                </h2>
+                <p className="text-3xl text-white mb-4">
+                  {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
+                </p>
+                <p className="text-lg text-gray-400 mb-6">
+                  Answer: <span className="text-yellow-300">
+                    {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.answer}
+                  </span>
+                </p>
+                <div className="text-center">
+                  <button
+                    onClick={() => sendMessage({ type: "HostContinue" })}
+                    className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold"
+                  >
+                    Continue to Board
                   </button>
                 </div>
               </div>

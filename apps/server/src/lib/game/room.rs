@@ -343,8 +343,8 @@ impl Room {
 
         if correct {
             question.answered = true;
-            self.current_question = None;
             self.current_buzzer = None;
+            self.state = GameState::AnswerReveal;
             self.state = if self.has_remaining_questions() {
                 GameState::Selection
             } else {
@@ -356,14 +356,8 @@ impl Room {
             self.state = GameState::WaitingForBuzz;
         } else {
             question.answered = true;
-            self.current_question = None;
             self.current_buzzer = None;
-            self.state = if self.has_remaining_questions() {
-                GameState::Selection
-            } else {
-                self.determine_winner();
-                GameState::GameEnd
-            };
+            self.state = GameState::AnswerReveal;
         }
 
         RoomResponse::broadcast_state(self.build_game_state_msg())
