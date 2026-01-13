@@ -54,6 +54,10 @@ pub enum WsMsg {
     HostChecked {
         correct: bool,
     },
+    #[serde(alias = "HostSkip")]
+    HostSkip {},
+    #[serde(alias = "HostContinue")]
+    HostContinue {},
 
     // Buzzer
     #[serde(alias = "BuzzEnable")]

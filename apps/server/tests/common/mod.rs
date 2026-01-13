@@ -209,6 +209,10 @@ pub async fn play_question(
     // Host checks answer
     send_cmd_and_recv_all(host_ws, &GameCommand::HostChecked { correct }).await;
     let _ = recv_msgs(player_ws).await;
+
+    // Host continues from answer reveal
+    send_msg_and_recv_all(host_ws, &WsMsg::HostContinue {}).await;
+    let _ = recv_msgs(player_ws).await;
 }
 
 /// Get player score from room map
