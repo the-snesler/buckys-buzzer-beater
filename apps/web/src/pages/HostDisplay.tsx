@@ -144,7 +144,7 @@ export default function HostDisplay() {
                           : "bg-red-600 text-white border-2 border-red-600"
                       }`}
                     >
-                      {question.answered ? "" : `$${question.value}`}
+                      {`$${question.value}`}
                     </div>
                   ))}
                 </React.Fragment>
