@@ -92,24 +92,25 @@ export default function Host() {
     autoConnect: true,
     onMessage: (message) => {
       console.log("Received message:", message);
-      const [type, payload] = Object.entries(message)[0];
-
-      switch (type) {
+      switch (message.type) {
         case "PlayerList":
-          console.log("Received PlayerList update:", payload);
-          setPlayerList(payload as PlayerState[]);
+          console.log("Received PlayerList update:", message.players);
+          setPlayerList(message.players);
           break;
         case "GameState":
-          setGameState(payload as GameState);
-          if ((payload as GameState).state !== "answer") {
+          setGameState({
+            state: message.state,
+            categories: message.categories,
+            players: message.players,
+            currentQuestion: message.currentQuestion,
+            currentBuzzer: message.currentBuzzer,
+          });
+          if (message.state !== "answer") {
             setBuzzedPlayer(null); // Clear buzzed player when state changes
           }
           break;
-        case "Buzzed":
-          setBuzzedPlayer(payload as { pid: number; name: string });
-          break;
-        case "AnswerResult":
-          // Could show a notification, but GameState will update scores
+        case "PlayerBuzzed":
+          setBuzzedPlayer({ pid: message.pid, name: message.name });
           break;
         default:
           break;

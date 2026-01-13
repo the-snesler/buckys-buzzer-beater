@@ -96,7 +96,7 @@ mod gameplay_tests {
             .iter()
             .find(|m| matches!(m, GameEvent::PlayerList { .. }));
 
-        if let Some(GameEvent::PlayerList(players)) = player_list_msg {
+        if let Some(GameEvent::PlayerList { players }) = player_list_msg {
             assert_eq!(players.len(), 1, "Should have 1 player");
             assert_eq!(players[0].name, "AJ");
             assert_eq!(players[0].pid, player_id);
@@ -138,7 +138,7 @@ mod gameplay_tests {
         let player_list = host_final
             .iter()
             .find(|m| matches!(m, GameEvent::PlayerList { .. }));
-        if let Some(GameEvent::PlayerList(players)) = player_list {
+        if let Some(GameEvent::PlayerList { players }) = player_list {
             assert_eq!(players.len(), 3, "Should have 3 players");
             let names: Vec<&str> = players.iter().map(|p| p.name.as_str()).collect();
             assert!(names.contains(&"Alice"));
@@ -694,7 +694,7 @@ mod gameplay_tests {
 
         let final_msgs = recv_msgs(&mut host_ws).await;
         let final_list = final_msgs.iter().rev().find_map(|m| {
-            if let GameEvent::PlayerList(players) = m {
+            if let GameEvent::PlayerList { players } = m {
                 Some(players)
             } else {
                 None

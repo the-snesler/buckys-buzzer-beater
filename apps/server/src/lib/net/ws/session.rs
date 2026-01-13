@@ -50,8 +50,9 @@ async fn register_host(room: &mut Room, tx: Sender<GameEvent>) -> anyhow::Result
     tracing::info!("Registering host for room {}", room.code);
     room.host = Some(HostEntry::new(0, tx.clone()));
 
-    let player_list =
-        GameEvent::PlayerList(room.players.iter().map(|e| e.player.clone()).collect());
+    let player_list = GameEvent::PlayerList {
+        players: room.players.iter().map(|e| e.player.clone()).collect(),
+    };
     tracing::info!("Sending player list to host: {} players", room.players.len());
     let _ = tx.send(player_list).await;
 
@@ -151,7 +152,7 @@ pub async fn send_player_list_to_host(
     players: &[PlayerEntry],
 ) -> anyhow::Result<()> {
     let list: Vec<Player> = players.iter().map(|entry| entry.player.clone()).collect();
-    let msg = GameEvent::PlayerList(list);
+    let msg = GameEvent::PlayerList { players: list };
     host.sender.send(msg).await?;
     Ok(())
 }
