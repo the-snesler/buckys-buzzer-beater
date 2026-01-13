@@ -30,6 +30,7 @@ interface GameState {
 }
 
 export default function Host() {
+  console.log("Host mounted", new Date().toISOString());
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
   const [playerList, setPlayerList] = useState<PlayerState[]>([]);
@@ -91,23 +92,25 @@ export default function Host() {
     autoConnect: true,
     onMessage: (message) => {
       console.log("Received message:", message);
-      const [type, payload] = Object.entries(message)[0];
-
-      switch (type) {
+      switch (message.type) {
         case "PlayerList":
-          setPlayerList(payload as PlayerState[]);
+          console.log("Received PlayerList update:", message.players);
+          setPlayerList(message.players);
           break;
         case "GameState":
-          setGameState(payload as GameState);
-          if ((payload as GameState).state !== "answer") {
+          setGameState({
+            state: message.state,
+            categories: message.categories,
+            players: message.players,
+            currentQuestion: message.currentQuestion,
+            currentBuzzer: message.currentBuzzer,
+          });
+          if (message.state !== "answer") {
             setBuzzedPlayer(null); // Clear buzzed player when state changes
           }
           break;
-        case "Buzzed":
-          setBuzzedPlayer(payload as { pid: number; name: string });
-          break;
-        case "AnswerResult":
-          // Could show a notification, but GameState will update scores
+        case "PlayerBuzzed":
+          setBuzzedPlayer({ pid: message.pid, name: message.name });
           break;
         default:
           break;
@@ -181,7 +184,7 @@ export default function Host() {
                           <button
                             key={qIdx}
                             disabled={question.answered}
-                            onClick={() => sendMessage({ HostChoice: { categoryIndex: catIdx, questionIndex: qIdx } })}
+                            onClick={() => sendMessage({ type: "HostChoice", categoryIndex: catIdx, questionIndex: qIdx })}
                             className={`w-full py-4 rounded font-bold text-lg ${
                               question.answered
                                 ? "bg-gray-700 text-gray-500 cursor-not-allowed"
@@ -209,10 +212,16 @@ export default function Host() {
                   {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
                 </p>
                 <button
-                  onClick={() => sendMessage({ HostReady: {} })}
+                  onClick={() => sendMessage({ type: "HostReady" })}
                   className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 text-lg font-semibold"
                 >
                   Open Buzzing
+                </button>
+                <button
+                  onClick={() => sendMessage({ type: "HostSkip" })}
+                  className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
+                >
+                  Skip Question
                 </button>
               </div>
             )}
@@ -230,7 +239,7 @@ export default function Host() {
                 <div className="text-center">
                   <p className="text-2xl text-green-400 animate-pulse mb-4">Waiting for buzz...</p>
                   <button
-                    onClick={() => sendMessage({ HostSkip: {} })}
+                    onClick={() => sendMessage({ type: "HostSkip" })}
                     className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
                   >
                     Skip Question
@@ -261,13 +270,13 @@ export default function Host() {
                 )}
                 <div className="flex gap-4 justify-center">
                   <button
-                    onClick={() => sendMessage({ HostChecked: { correct: true } })}
+                    onClick={() => sendMessage({ type: "HostChecked", correct: true })}
                     className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 text-lg font-semibold"
                   >
                     Correct
                   </button>
                   <button
-                    onClick={() => sendMessage({ HostChecked: { correct: false } })}
+                    onClick={() => sendMessage({ type: "HostChecked", correct: false })}
                     className="px-8 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 text-lg font-semibold"
                   >
                     Incorrect
@@ -297,10 +306,10 @@ export default function Host() {
                   </p>
                 )}
                 <button
-                  onClick={() => sendMessage({ HostContinue: {} })}
+                  onClick={() => sendMessage({ type: "HostContinue" })}
                   className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold"
                 >
-                  Continue to Next Question
+                  Continue to Board
                 </button>
               </div>
             )}
@@ -387,7 +396,7 @@ export default function Host() {
               )}
               {playerList.length >= 1 && (
                 <button
-                  onClick={() => sendMessage({ StartGame: {} })}
+                  onClick={() => sendMessage({ type: "StartGame" })}
                   className="mt-6 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
                 >
                   Start Game

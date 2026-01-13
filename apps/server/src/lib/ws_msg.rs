@@ -3,18 +3,22 @@ use serde::{Deserialize, Serialize};
 use crate::{
     HeartbeatId, UnixMs,
     game::{Category, GameState},
+    net::connection::PlayerToken,
     player::{Player, PlayerId},
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
 pub enum WsMsg {
     Witness {
         msg: Box<WsMsg>,
     },
-    PlayerList(Vec<Player>),
+    PlayerList {
+        players: Vec<Player>,
+    },
     NewPlayer {
         pid: PlayerId,
-        token: String,
+        token: PlayerToken,
     },
 
     // Game State Broadcast

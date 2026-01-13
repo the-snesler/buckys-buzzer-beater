@@ -96,7 +96,7 @@ mod gameplay_tests {
             .iter()
             .find(|m| matches!(m, GameEvent::PlayerList { .. }));
 
-        if let Some(GameEvent::PlayerList { players }) = player_list_msg {
+        if let Some(GameEvent::PlayerList(players)) = player_list_msg {
             assert_eq!(players.len(), 1, "Should have 1 player");
             assert_eq!(players[0].name, "AJ");
             assert_eq!(players[0].pid, player_id);
@@ -138,7 +138,7 @@ mod gameplay_tests {
         let player_list = host_final
             .iter()
             .find(|m| matches!(m, GameEvent::PlayerList { .. }));
-        if let Some(GameEvent::PlayerList { players }) = player_list {
+        if let Some(GameEvent::PlayerList(players)) = player_list {
             assert_eq!(players.len(), 3, "Should have 3 players");
             let names: Vec<&str> = players.iter().map(|p| p.name.as_str()).collect();
             assert!(names.contains(&"Alice"));
@@ -196,15 +196,13 @@ mod gameplay_tests {
         send_cmd_and_recv_all(&mut player_ws, &GameCommand::Buzz {}).await;
         let host_buzz = recv_msgs(&mut host_ws).await;
 
-        let buzz_notification = host_buzz
-            .iter()
-            .find(|m| matches!(m, GameEvent::PlayerBuzzed { .. }));
+        let buzz_notification = host_buzz.iter().find(|m| matches!(m, GameEvent::Buzzed { .. }));
         assert!(
             buzz_notification.is_some(),
             "Host should receive PlayerBuzzed"
         );
 
-        if let Some(GameEvent::PlayerBuzzed { pid, .. }) = buzz_notification {
+        if let Some(GameEvent::Buzzed { pid, .. }) = buzz_notification {
             assert_eq!(*pid, player_id, "Correct player buzzed");
         }
 
@@ -280,12 +278,9 @@ mod gameplay_tests {
             .any(|m| matches!(m, GameEvent::NewPlayer { .. }));
         assert!(!got_new_player, "Should not get NewPlayer on reconnect");
 
-        let has_state = reconnect_msgs.iter().any(|m| {
-            matches!(
-                m,
-                GameEvent::PlayerState { .. } | GameEvent::GameState { .. }
-            )
-        });
+        let has_state = reconnect_msgs
+            .iter()
+            .any(|m| matches!(m, GameEvent::PlayerState { .. } | GameEvent::GameState { .. }));
         assert!(has_state, "Should receive state on reconnect");
 
         if let Some(GameEvent::PlayerState { pid, .. }) = reconnect_msgs
@@ -609,14 +604,14 @@ mod gameplay_tests {
         let host_msgs = recv_msgs(&mut host_ws).await;
         let buzz_count = host_msgs
             .iter()
-            .filter(|m| matches!(m, GameEvent::PlayerBuzzed { .. }))
+            .filter(|m| matches!(m, GameEvent::Buzzed { .. }))
             .count();
         assert_eq!(buzz_count, 1, "Host should receive exactly one buzz");
 
         let buzzed_player = host_msgs
             .iter()
             .find_map(|m| {
-                if let GameEvent::PlayerBuzzed { pid, .. } = m {
+                if let GameEvent::Buzzed { pid, .. } = m {
                     Some(*pid)
                 } else {
                     None
@@ -699,7 +694,7 @@ mod gameplay_tests {
 
         let final_msgs = recv_msgs(&mut host_ws).await;
         let final_list = final_msgs.iter().rev().find_map(|m| {
-            if let GameEvent::PlayerList { players } = m {
+            if let GameEvent::PlayerList(players) = m {
                 Some(players)
             } else {
                 None
@@ -746,11 +741,8 @@ mod gameplay_tests {
         let (hbid, t_sent) = do_heartbeat.expect("Could not do heartbeat");
 
         let t_dohb_recv = PlayerEntry::time_ms();
-        let got_msgs = send_cmd_and_recv_all(
-            &mut player_ws,
-            &GameCommand::Heartbeat { hbid, t_dohb_recv },
-        )
-        .await;
+        let got_msgs =
+            send_cmd_and_recv_all(&mut player_ws, &GameCommand::Heartbeat { hbid, t_dohb_recv }).await;
 
         let got_heartbeat = got_msgs
             .iter()
@@ -759,11 +751,7 @@ mod gameplay_tests {
         assert!(got_heartbeat, "Player should receive GotHeartbeat");
 
         let t_lat = PlayerEntry::time_ms() - t_sent;
-        send_cmd_and_recv_all(
-            &mut player_ws,
-            &GameCommand::LatencyOfHeartbeat { hbid, t_lat },
-        )
-        .await;
+        send_cmd_and_recv_all(&mut player_ws, &GameCommand::LatencyOfHeartbeat { hbid, t_lat }).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         {
@@ -840,11 +828,7 @@ mod gameplay_tests {
 mod room_cleanup {
     use std::sync::Arc;
 
-    use madhacks2025::{
-        AppState, cleanup_inactive_rooms,
-        game::room::Room,
-        net::connection::{HostToken, RoomCode},
-    };
+    use madhacks2025::{cleanup_inactive_rooms, game::room::Room, net::connection::{HostToken, RoomCode}, AppState};
 
     use super::*;
 
