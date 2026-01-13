@@ -139,10 +139,8 @@ async fn register_new_player(
                 let _ = player.sender.send(game_state.clone()).await;
             }
         }
-    } else {
-        if let Some(host) = &room.host {
-            let _ = send_player_list_to_host(host, &room.players).await;
-        }
+    } else if let Some(host) = &room.host {
+        let _ = send_player_list_to_host(host, &room.players).await;
     }
 
     if let Some(host) = &room.host {

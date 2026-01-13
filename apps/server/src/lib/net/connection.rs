@@ -88,10 +88,6 @@ impl HostToken {
         Self(Uuid::new_v4())
     }
 
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
-    }
-
     pub fn matches(&self, uuid: Uuid) -> bool {
         self.0 == uuid
     }
@@ -125,10 +121,6 @@ impl PlayerToken {
     /// Generates a new random UUID v4.
     pub fn generate() -> Self {
         Self(Uuid::new_v4())
-    }
-
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
     }
 
     pub fn matches(&self, uuid: Uuid) -> bool {
