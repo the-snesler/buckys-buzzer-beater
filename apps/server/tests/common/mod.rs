@@ -211,7 +211,7 @@ pub async fn play_question(
     let _ = recv_msgs(player_ws).await;
 
     // Host continues from answer reveal
-    send_msg_and_recv_all(host_ws, &WsMsg::HostContinue {}).await;
+    send_cmd_and_recv_all(host_ws, &GameCommand::HostContinue {}).await;
     let _ = recv_msgs(player_ws).await;
 }
 

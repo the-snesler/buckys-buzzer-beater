@@ -8,11 +8,14 @@ use crate::{
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
 pub enum WsMsg {
     Witness {
         msg: Box<WsMsg>,
     },
-    PlayerList(Vec<Player>),
+    PlayerList {
+        players: Vec<Player>,
+    },
     NewPlayer {
         pid: PlayerId,
         token: PlayerToken,

@@ -97,8 +97,10 @@ impl GameCommand {
 /// };
 /// let json = serde_json::to_string(&event).unwrap();
 /// assert!(json.contains("PlayerState"));
+/// assert!(json.contains("\"type\":\"PlayerState\""));
 /// ```
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "type")]
 pub enum GameEvent {
     Witness {
         msg: Box<GameEvent>,
@@ -110,7 +112,9 @@ pub enum GameEvent {
     GotHeartbeat {
         hbid: u32,
     },
-    PlayerList(Vec<Player>),
+    PlayerList {
+        players: Vec<Player>,
+    },
     NewPlayer {
         pid: PlayerId,
         token: PlayerToken,
@@ -282,8 +286,8 @@ mod test {
         let test_cases = vec![
             TestCase {
                 name: "PlayerList",
-                event: GameEvent::PlayerList(vec![]),
-                expected_substrings: vec!["PlayerList"],
+                event: GameEvent::PlayerList { players: vec![] },
+                expected_substrings: vec![r#""type":"PlayerList""#, r#""players":[]"#],
             },
             TestCase {
                 name: "NewPlayer",
@@ -291,7 +295,7 @@ mod test {
                     pid: 1,
                     token: PlayerToken::generate(),
                 },
-                expected_substrings: vec!["NewPlayer", r#""pid":1"#, r#""token""#],
+                expected_substrings: vec![r#""type":"NewPlayer""#, r#""pid":1"#, r#""token""#],
             },
             TestCase {
                 name: "GameState",
@@ -303,7 +307,7 @@ mod test {
                     current_buzzer: None,
                     winner: None,
                 },
-                expected_substrings: vec!["GameState", r#""state""#, r#""categories""#],
+                expected_substrings: vec![r#""type":"GameState""#, r#""state""#, r#""categories""#],
             },
             TestCase {
                 name: "PlayerState with camelCase",
@@ -314,7 +318,7 @@ mod test {
                     can_buzz: false,
                 },
                 expected_substrings: vec![
-                    "PlayerState",
+                    r#""type":"PlayerState""#,
                     r#""pid":1"#,
                     r#""buzzed":true"#,
                     r#""score":500"#,
@@ -327,7 +331,7 @@ mod test {
                     pid: 2,
                     name: "PlayerName".to_string(),
                 },
-                expected_substrings: vec!["PlayerBuzzed", r#""pid":2"#, "PlayerName"],
+                expected_substrings: vec![r#""type":"PlayerBuzzed""#, r#""pid":2"#, "PlayerName"],
             },
             TestCase {
                 name: "DoHeartbeat",
@@ -335,12 +339,12 @@ mod test {
                     hbid: 123,
                     t_sent: 1609459200000,
                 },
-                expected_substrings: vec!["DoHeartbeat", r#""hbid":123"#, "1609459200000"],
+                expected_substrings: vec![r#""type":"DoHeartbeat""#, r#""hbid":123"#, "1609459200000"],
             },
             TestCase {
                 name: "GotHeartbeat",
                 event: GameEvent::GotHeartbeat { hbid: 456 },
-                expected_substrings: vec!["GotHeartbeat", r#""hbid":456"#],
+                expected_substrings: vec![r#""type":"GotHeartbeat""#, r#""hbid":456"#],
             },
             TestCase {
                 name: "Witness nested",
@@ -350,7 +354,7 @@ mod test {
                         name: "Bob".to_string(),
                     }),
                 },
-                expected_substrings: vec!["Witness", r#""msg""#, "PlayerBuzzed"],
+                expected_substrings: vec![r#""type":"Witness""#, r#""msg""#, "PlayerBuzzed"],
             },
         ];
 

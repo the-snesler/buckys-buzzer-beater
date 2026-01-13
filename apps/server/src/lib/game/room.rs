@@ -341,29 +341,13 @@ impl Room {
 
         let any_can_buzz = self.players.iter().any(|p| !p.player.buzzed);
 
-        if correct {
-            question.answered = true;
-            self.current_question = None;
-            self.current_buzzer = None;
-            self.state = if self.has_remaining_questions() {
-                GameState::Selection
-            } else {
-                self.determine_winner();
-                GameState::GameEnd
-            };
-        } else if any_can_buzz {
+        if !correct && any_can_buzz {
             self.current_buzzer = None;
             self.state = GameState::WaitingForBuzz;
         } else {
             question.answered = true;
-            self.current_question = None;
             self.current_buzzer = None;
-            self.state = if self.has_remaining_questions() {
-                GameState::Selection
-            } else {
-                self.determine_winner();
-                GameState::GameEnd
-            };
+            self.state = GameState::AnswerReveal;
         }
 
         RoomResponse::broadcast_state(self.build_game_state_msg())
@@ -433,6 +417,7 @@ mod tests {
         room.categories[0].questions[0].answered = true;
 
         room.handle_command(&GameCommand::HostChecked { correct: true }, None);
+        room.handle_command(&GameCommand::HostContinue, None);
 
         assert_eq!(room.state, GameState::GameEnd);
         assert_eq!(room.winner, Some(1), "Player 1 should be winner");
@@ -684,6 +669,10 @@ mod tests {
                 None,
             );
 
+            if room.state == GameState::AnswerReveal  {
+                room.handle_command(&GameCommand::HostContinue, None);
+            }
+
             assert_eq!(
                 room.players[0].player.score, tc.expected_score,
                 "Test case failed (score): {}",
@@ -710,7 +699,7 @@ mod tests {
         room.state = GameState::WaitingForBuzz;
         room.current_question = Some((0, 0));
 
-        room.handle_message(&WsMsg::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, None);
 
         assert!(
             room.categories[0].questions[0].answered,
@@ -731,7 +720,7 @@ mod tests {
         room.state = GameState::WaitingForBuzz;
         room.current_question = Some((0, 0));
 
-        room.handle_message(&WsMsg::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, None);
 
         assert_eq!(
             room.state,
@@ -739,7 +728,7 @@ mod tests {
             "Should first go to AnswerReveal"
         );
 
-        room.handle_message(&WsMsg::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, None);
 
         assert_eq!(
             room.state,
@@ -761,7 +750,7 @@ mod tests {
         room.categories[0].questions[0].answered = true;
         room.current_question = Some((0, 1)); // Last question
 
-        room.handle_message(&WsMsg::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, None);
 
         assert_eq!(
             room.state,
@@ -769,7 +758,7 @@ mod tests {
             "Should first go to AnswerReveal"
         );
 
-        room.handle_message(&WsMsg::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, None);
 
         assert_eq!(
             room.state,
@@ -795,8 +784,8 @@ mod tests {
         room.players[1].player.buzzed = true;
         room.current_buzzer = Some(1);
 
-        room.handle_message(&WsMsg::HostSkip {}, None);
-        room.handle_message(&WsMsg::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, None);
 
         assert!(
             !room.players[0].player.buzzed,
@@ -817,7 +806,7 @@ mod tests {
         room.current_question = Some((0, 0));
         room.players[0].player.score = 100;
 
-        room.handle_message(&WsMsg::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, None);
 
         assert_eq!(
             room.players[0].player.score, 100,
@@ -832,7 +821,7 @@ mod tests {
         room.state = GameState::Selection;
         room.current_question = None;
 
-        let response = room.handle_message(&WsMsg::HostSkip {}, None);
+        let response = room.handle_command(&GameCommand::HostSkip {}, None);
 
         assert_eq!(
             room.state,
@@ -856,8 +845,7 @@ mod tests {
         room.current_buzzer = Some(1);
 
         // Host marks answer correct
-        room.handle_message(&WsMsg::HostChecked { correct: true }, None);
-
+        room.handle_command(&GameCommand::HostChecked { correct: true }, None);
         assert_eq!(
             room.state,
             GameState::AnswerReveal,
@@ -866,7 +854,7 @@ mod tests {
         assert_eq!(room.players[0].player.score, 200, "Score should be updated");
 
         // Host continues
-        room.handle_message(&WsMsg::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, None);
 
         assert_eq!(
             room.state,
@@ -896,7 +884,7 @@ mod tests {
         room.players[1].player.buzzed = true; // All players have buzzed
 
         // Host marks answer incorrect
-        room.handle_message(&WsMsg::HostChecked { correct: false }, None);
+        room.handle_command(&GameCommand::HostChecked { correct: false }, None);
 
         assert_eq!(
             room.state,
@@ -909,7 +897,7 @@ mod tests {
         );
 
         // Host continues
-        room.handle_message(&WsMsg::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, None);
 
         assert_eq!(
             room.state,
@@ -928,7 +916,7 @@ mod tests {
         room.players[0].player.score = 100;
 
         // Host skips question
-        room.handle_message(&WsMsg::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, None);
 
         assert_eq!(
             room.state,
@@ -945,7 +933,7 @@ mod tests {
         );
 
         // Host continues
-        room.handle_message(&WsMsg::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, None);
 
         assert_eq!(
             room.state,
@@ -969,7 +957,7 @@ mod tests {
         room.current_buzzer = Some(1);
 
         // Host marks answer correct
-        room.handle_message(&WsMsg::HostChecked { correct: true }, None);
+        room.handle_command(&GameCommand::HostChecked { correct: true }, None);
 
         assert_eq!(
             room.state,
@@ -978,7 +966,7 @@ mod tests {
         );
 
         // Host continues from last question
-        room.handle_message(&WsMsg::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, None);
 
         assert_eq!(
             room.state,
@@ -1001,7 +989,7 @@ mod tests {
         room.players[1].player.buzzed = false; // Player 2 hasn't buzzed yet
 
         // Host marks answer incorrect
-        room.handle_message(&WsMsg::HostChecked { correct: false }, None);
+        room.handle_command(&GameCommand::HostChecked { correct: false }, None);
 
         assert_eq!(
             room.state,

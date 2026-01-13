@@ -22,61 +22,38 @@ export default function Player() {
     playerId: existingPlayerId || undefined,
     token: existingToken || undefined,
     onMessage: (message) => {
-      const [type, payload] = Object.entries(message)[0];
-      console.log("Received message:", type, payload);
-      switch (type) {
+      console.log("Received message:", message);
+      switch (message.type) {
         case "NewPlayer":
-          sessionStorage.setItem(`player_id_${code}`, (payload as any).pid);
+          sessionStorage.setItem(`player_id_${code}`, message.pid.toString());
           sessionStorage.setItem(
             `player_token_${code}`,
-            (payload as any).token
+            message.token
           );
           break;
         case "PlayerState":
-          const playerState = payload as {
-            pid: number;
-            buzzed: boolean;
-            score: number;
-            canBuzz: boolean;
-          };
-          setHasBuzzed(playerState.buzzed);
-          setCanBuzz(playerState.canBuzz);
-          setScore(playerState.score);
-          if (playerState.canBuzz || playerState.score !== 0) {
+          setHasBuzzed(message.buzzed);
+          setCanBuzz(message.canBuzz);
+          setScore(message.score);
+          if (message.canBuzz || message.score !== 0) {
             setGameStarted(true);
           }
           break;
         case "GameState":
-          const gameState = payload as {
-            state: String;
-          };
-          if (gameState.state !== "start") {
+          if (message.state !== "start") {
             setGameStarted(true);
           }
-          if (gameState.state === "waitingForBuzz") {
+          if (message.state === "waitingForBuzz") {
             setCanBuzz(true);
             setHasBuzzed(false);
             setGameStarted(true);
-          } else if (gameState.state === "selection" || gameState.state === "answerReveal") {
+          } else if (message.state === "questionReading" || message.state === "answer") {
             setCanBuzz(false);
             setHasBuzzed(false);
             setGameStarted(true);
           } else {
             setCanBuzz(false);
           }
-          break;
-        case "BuzzEnabled":
-          setCanBuzz(true);
-          setHasBuzzed(false);
-          setGameStarted(true);
-          break;
-        case "BuzzDisabled":
-          setCanBuzz(false);
-          setGameStarted(true);
-          break;
-        case "AnswerResult":
-          setHasBuzzed(false);
-          setGameStarted(true);
           break;
       }
     },

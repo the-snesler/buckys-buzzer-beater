@@ -1,19 +1,19 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { getWebSocketUrl } from '../lib/api';
-import type { NetworkMessage } from '../types/messages';
+import type { GameCommand, GameEvent } from '../types/messages';
 
 interface UseWebSocketOptions {
   roomCode: string;
   token?: string;
   playerName?: string;
   playerId?: string;
-  onMessage: (message: NetworkMessage) => void;
+  onMessage: (message: GameEvent) => void;
   autoConnect?: boolean;
 }
 
 interface UseWebSocketReturn {
   isConnected: boolean;
-  sendMessage: (message: Omit<NetworkMessage, 'senderId'>) => void;
+  sendMessage: (message: GameCommand) => void;
   connect: () => void;
   disconnect: () => void;
 }
@@ -73,21 +73,21 @@ export function useWebSocket({
 
     ws.onmessage = (event) => {
       try {
-        const message = JSON.parse(event.data) as NetworkMessage;
+        const message = JSON.parse(event.data) as GameEvent;
         console.log("Received message:", message);
-        const [type, payload] = Object.entries(message)[0];
-        if (type === "DoHeartbeat") {
-          const t_dohb_recv = Date.now();
-          const hbid = (payload as any).hbid;
-          ws.send(JSON.stringify({ type: "Heartbeat", hbid, tDohbRecv: t_dohb_recv }));
-          lastHeartbeatRef.current = t_dohb_recv;
-          return;
-        }
-        if (type === "GotHeartbeat") {
-          const hbid = (payload as any).hbid;
-          const t_lat = Date.now() - lastHeartbeatRef.current;
-          ws.send(JSON.stringify({ type: "LatencyOfHeartbeat", hbid, tLat: t_lat }));
-          return;
+        
+        switch (message.type) {
+          case "DoHeartbeat": {
+            const t_dohb_recv = Date.now();
+            ws.send(JSON.stringify({ type: "Heartbeat", hbid: message.hbid, tDohbRecv: t_dohb_recv }));
+            lastHeartbeatRef.current = t_dohb_recv;
+            return;
+          }
+          case "GotHeartbeat": {
+            const t_lat = Date.now() - lastHeartbeatRef.current;
+            ws.send(JSON.stringify({ type: "LatencyOfHeartbeat", hbid: message.hbid, tLat: t_lat }));
+            return;
+          }
         }
         onMessageRef.current(message);
       } catch (err) {
@@ -109,7 +109,7 @@ export function useWebSocket({
     }
   }, []);
 
-  const sendMessage = useCallback((message: Omit<NetworkMessage, 'senderId'>) => {
+  const sendMessage = useCallback((message: GameCommand) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
     } else {
