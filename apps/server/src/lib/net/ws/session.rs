@@ -53,7 +53,10 @@ async fn register_host(room: &mut Room, tx: Sender<GameEvent>) -> anyhow::Result
     let player_list = GameEvent::PlayerList {
         players: room.players.iter().map(|e| e.player.clone()).collect(),
     };
-    tracing::info!("Sending player list to host: {} players", room.players.len());
+    tracing::info!(
+        "Sending player list to host: {} players",
+        room.players.len()
+    );
     let _ = tx.send(player_list).await;
 
     if room.state != GameState::Start {
@@ -107,9 +110,12 @@ async fn register_new_player(
         Player::new(new_id, name, 0, false, token.clone()),
         tx.clone(),
     );
-    tracing::info!("Broadcasting new player {} to {} existing players and host", &player.player.pid, room.players.len());
+    tracing::info!(
+        "Broadcasting new player {} to {} existing players and host",
+        &player.player.pid,
+        room.players.len()
+    );
     room.players.push(player);
-
 
     tx.send(GameEvent::NewPlayer { pid: new_id, token }).await?;
     let can_buzz = room.state == GameState::WaitingForBuzz;

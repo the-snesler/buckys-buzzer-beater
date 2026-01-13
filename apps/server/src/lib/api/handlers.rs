@@ -1,10 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{
-    PlayerId,
-    game::room::Room,
-};
+use crate::{PlayerId, game::room::Room};
 
 #[derive(Deserialize, Debug)]
 pub struct WsQuery {
@@ -79,12 +76,13 @@ pub fn perform_handshake(room: &Room, query: &WsQuery) -> anyhow::Result<Authent
         }
 
         if let Some(pid) = query.player_id {
-            let found = room.players.iter().any(|p| {
-                p.player.pid == pid && p.player.token.matches(provided_token)
-            });
+            let found = room
+                .players
+                .iter()
+                .any(|p| p.player.pid == pid && p.player.token.matches(provided_token));
 
             if found {
-                return Ok(AuthenticatedUser::ExistingPlayer { pid })
+                return Ok(AuthenticatedUser::ExistingPlayer { pid });
             }
         }
 
@@ -134,7 +132,7 @@ mod test {
         let host_uuid = Uuid::new_v4();
         let room = Room::new(
             RoomCode::from("TEST".to_string()),
-            HostToken::from(host_uuid)
+            HostToken::from(host_uuid),
         );
 
         let query = WsQuery {

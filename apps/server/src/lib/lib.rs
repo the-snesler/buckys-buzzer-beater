@@ -10,7 +10,7 @@
 //! 4. **Scoring**: Points awarded/deducted based on answer correctness
 //!
 //! # Modules
-//! 
+//!
 //! - [`api`] - HTTP routes and WebSocket handlers
 //! - [`game`] - Game logic and state management
 //! - [`net`] - Networking connections and tokens

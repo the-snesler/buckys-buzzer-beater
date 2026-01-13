@@ -372,7 +372,7 @@ mod tests {
     fn create_test_room() -> Room {
         let mut room = Room::new(RoomCode::from("TEST".to_string()), HostToken::generate());
 
-        room.categories = vec![Category { 
+        room.categories = vec![Category {
             title: "Test Category".to_string(),
             questions: vec![
                 Question {
@@ -669,7 +669,7 @@ mod tests {
                 None,
             );
 
-            if room.state == GameState::AnswerReveal  {
+            if room.state == GameState::AnswerReveal {
                 room.handle_command(&GameCommand::HostContinue, None);
             }
 
