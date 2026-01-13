@@ -196,7 +196,9 @@ mod gameplay_tests {
         send_cmd_and_recv_all(&mut player_ws, &GameCommand::Buzz {}).await;
         let host_buzz = recv_msgs(&mut host_ws).await;
 
-        let buzz_notification = host_buzz.iter().find(|m| matches!(m, GameEvent::PlayerBuzzed { .. }));
+        let buzz_notification = host_buzz
+            .iter()
+            .find(|m| matches!(m, GameEvent::PlayerBuzzed { .. }));
         assert!(
             buzz_notification.is_some(),
             "Host should receive PlayerBuzzed"
@@ -278,9 +280,12 @@ mod gameplay_tests {
             .any(|m| matches!(m, GameEvent::NewPlayer { .. }));
         assert!(!got_new_player, "Should not get NewPlayer on reconnect");
 
-        let has_state = reconnect_msgs
-            .iter()
-            .any(|m| matches!(m, GameEvent::PlayerState { .. } | GameEvent::GameState { .. }));
+        let has_state = reconnect_msgs.iter().any(|m| {
+            matches!(
+                m,
+                GameEvent::PlayerState { .. } | GameEvent::GameState { .. }
+            )
+        });
         assert!(has_state, "Should receive state on reconnect");
 
         if let Some(GameEvent::PlayerState { pid, .. }) = reconnect_msgs
@@ -741,8 +746,11 @@ mod gameplay_tests {
         let (hbid, t_sent) = do_heartbeat.expect("Could not do heartbeat");
 
         let t_dohb_recv = PlayerEntry::time_ms();
-        let got_msgs =
-            send_cmd_and_recv_all(&mut player_ws, &GameCommand::Heartbeat { hbid, t_dohb_recv }).await;
+        let got_msgs = send_cmd_and_recv_all(
+            &mut player_ws,
+            &GameCommand::Heartbeat { hbid, t_dohb_recv },
+        )
+        .await;
 
         let got_heartbeat = got_msgs
             .iter()
@@ -751,7 +759,11 @@ mod gameplay_tests {
         assert!(got_heartbeat, "Player should receive GotHeartbeat");
 
         let t_lat = PlayerEntry::time_ms() - t_sent;
-        send_cmd_and_recv_all(&mut player_ws, &GameCommand::LatencyOfHeartbeat { hbid, t_lat }).await;
+        send_cmd_and_recv_all(
+            &mut player_ws,
+            &GameCommand::LatencyOfHeartbeat { hbid, t_lat },
+        )
+        .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         {
@@ -828,7 +840,11 @@ mod gameplay_tests {
 mod room_cleanup {
     use std::sync::Arc;
 
-    use madhacks2025::{cleanup_inactive_rooms, game::room::Room, net::connection::{HostToken, RoomCode}, AppState};
+    use madhacks2025::{
+        AppState, cleanup_inactive_rooms,
+        game::room::Room,
+        net::connection::{HostToken, RoomCode},
+    };
 
     use super::*;
 

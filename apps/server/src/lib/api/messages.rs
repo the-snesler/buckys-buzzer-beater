@@ -339,7 +339,11 @@ mod test {
                     hbid: 123,
                     t_sent: 1609459200000,
                 },
-                expected_substrings: vec![r#""type":"DoHeartbeat""#, r#""hbid":123"#, "1609459200000"],
+                expected_substrings: vec![
+                    r#""type":"DoHeartbeat""#,
+                    r#""hbid":123"#,
+                    "1609459200000",
+                ],
             },
             TestCase {
                 name: "GotHeartbeat",

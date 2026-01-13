@@ -87,4 +87,3 @@ pub enum GameState {
     WaitingForBuzz,
     GameEnd,
 }
-
