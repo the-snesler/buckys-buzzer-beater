@@ -183,7 +183,7 @@ export default function Lobby() {
         </div>
 
         {/* Join Game Card */}
-        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-4 md:p-8 mb-6 border-4 border-red-700 transform hover:scale-[1.02] transition-transform">
+        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-4 md:p-8 mb-6 border-4 border-red-700 transform transition-transform">
           <h3
             className="text-2xl font-black text-red-900 mb-6 tracking-wide"
             style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}
@@ -232,7 +232,7 @@ export default function Lobby() {
         </div>
 
         {/* Host Game Card */}
-        <div className="bg-stone-900/90 backdrop-blur-sm rounded-2xl shadow-2xl p-4 md:p-8 border-4 border-stone-700 transform hover:scale-[1.02] transition-transform">
+        <div className="bg-stone-900/90 backdrop-blur-sm rounded-2xl shadow-2xl p-4 md:p-8 border-4 border-stone-700 transform transition-transform">
           <h3
             className="text-2xl font-black text-white mb-6 tracking-wide"
             style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}

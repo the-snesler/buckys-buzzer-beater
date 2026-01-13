@@ -172,28 +172,30 @@ export default function Host() {
             {gameState.state === "selection" && (
               <div className="bg-gray-800 rounded-lg p-6">
                 <h2 className="text-2xl font-semibold text-white mb-4">Select a Question</h2>
-                <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)` }}>
-                  {gameState.categories.map((category, catIdx) => (
-                    <div key={catIdx} className="space-y-2">
-                      <h3 className="text-center text-yellow-400 font-bold text-sm uppercase truncate">
-                        {category.title}
-                      </h3>
-                      {category.questions.map((question, qIdx) => (
-                        <button
-                          key={qIdx}
-                          disabled={question.answered}
-                          onClick={() => sendMessage({ type: "HostChoice", categoryIndex: catIdx, questionIndex: qIdx })}
-                          className={`w-full py-4 rounded font-bold text-lg ${
-                            question.answered
-                              ? "bg-gray-700 text-gray-500 cursor-not-allowed"
-                              : "bg-red-600 text-white hover:bg-red-500"
-                          }`}
-                        >
-                          ${question.value}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
+                <div className="overflow-x-auto">
+                  <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)` }}>
+                    {gameState.categories.map((category, catIdx) => (
+                      <div key={catIdx} className="space-y-2">
+                        <h3 className="text-center text-yellow-400 font-bold text-sm uppercase truncate">
+                          {category.title}
+                        </h3>
+                        {category.questions.map((question, qIdx) => (
+                          <button
+                            key={qIdx}
+                            disabled={question.answered}
+                            onClick={() => sendMessage({ type: "HostChoice", categoryIndex: catIdx, questionIndex: qIdx })}
+                            className={`w-full py-4 rounded font-bold text-lg ${
+                              question.answered
+                                ? "bg-gray-700 text-gray-500 cursor-not-allowed"
+                                : "bg-red-600 text-white hover:bg-red-500"
+                            }`}
+                          >
+                            ${question.value}
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
@@ -234,7 +236,7 @@ export default function Host() {
                   {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
                 </p>
                 <div className="text-center">
-                  <p className="text-2xl text-green-400 animate-pulse">Waiting for buzz...</p>
+                  <p className="text-2xl text-green-400 animate-pulse mb-4">Waiting for buzz...</p>
                   <button
                     onClick={() => sendMessage({ type: "HostSkip" })}
                     className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
@@ -292,19 +294,22 @@ export default function Host() {
                 <p className="text-3xl text-white mb-4">
                   {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
                 </p>
-                <p className="text-lg text-gray-400 mb-6">
+                <p className="text-2xl text-green-400 mb-6">
                   Answer: <span className="text-yellow-300">
                     {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.answer}
                   </span>
                 </p>
-                <div className="text-center">
-                  <button
-                    onClick={() => sendMessage({ type: "HostContinue" })}
-                    className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold"
-                  >
-                    Continue to Board
-                  </button>
-                </div>
+                {buzzedPlayer && (
+                  <p className="text-lg text-gray-300 mb-6">
+                    Answered by: {buzzedPlayer.name}
+                  </p>
+                )}
+                <button
+                  onClick={() => sendMessage({ type: "HostContinue" })}
+                  className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold"
+                >
+                  Continue to Board
+                </button>
               </div>
             )}
 
@@ -377,16 +382,16 @@ export default function Host() {
               {playerList.length === 0 ? (
                 <p className="text-gray-400">No players have joined yet.</p>
               ) : (
-                <ul className="space-y-2">
+                <div className="flex flex-wrap justify-center gap-4">
                   {playerList.map((player) => (
-                    <li
+                    <div
                       key={player.pid}
-                      className="bg-gray-700 rounded p-3 text-white"
+                      className="bg-gray-700 rounded py-2 px-4 text-white grow"
                     >
-                      {player.name} (Score: ${player.score})
-                    </li>
+                      {player.name}
+                    </div>
                   ))}
-                </ul>
+                </div>
               )}
               {playerList.length >= 1 && (
                 <button
