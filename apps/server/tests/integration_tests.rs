@@ -68,7 +68,11 @@ mod smoke_tests {
 }
 
 mod gameplay_tests {
-    use madhacks2025::{api::messages::WagerRange, game::GameState, net::connection::PlayerEntry};
+    use madhacks2025::{
+        api::messages::{FinalView, WagerRange},
+        game::GameState,
+        net::connection::PlayerEntry,
+    };
 
     use super::*;
 
@@ -1391,6 +1395,531 @@ mod gameplay_tests {
             })
             .collect();
         assert_eq!(counts, vec![1, 2]);
+    }
+
+    /// The Final Jeopardy fields of a PlayerState:
+    /// `(wager range, wager, prompt, can answer, answer, correct)`
+    type FinalPlayerView = (
+        Option<WagerRange>,
+        Option<u32>,
+        Option<String>,
+        bool,
+        Option<String>,
+        Option<bool>,
+    );
+
+    /// The Final Jeopardy fields of the last PlayerState in `msgs`
+    fn last_final_view(msgs: &[GameEvent]) -> Option<FinalPlayerView> {
+        msgs.iter().rev().find_map(|m| match m {
+            GameEvent::PlayerState {
+                wager_range,
+                wager,
+                prompt,
+                can_answer,
+                answer,
+                correct,
+                ..
+            } => Some((
+                *wager_range,
+                *wager,
+                prompt.clone(),
+                *can_answer,
+                answer.clone(),
+                *correct,
+            )),
+            _ => None,
+        })
+    }
+
+    /// The Final Jeopardy in the last GameState in `msgs`
+    fn last_host_final(msgs: &[GameEvent]) -> Option<FinalView> {
+        msgs.iter()
+            .rev()
+            .find_map(|m| match m {
+                GameEvent::GameState { final_jeopardy, .. } => Some(final_jeopardy.clone()),
+                _ => None,
+            })
+            .flatten()
+    }
+
+    /// `(pid, wager, answer, correct, revealed)` of each entry
+    type HostFinalEntry = (u32, Option<u32>, Option<String>, Option<bool>, bool);
+
+    fn host_final_entries(final_view: &FinalView) -> Vec<HostFinalEntry> {
+        final_view
+            .entries
+            .iter()
+            .map(|e| (e.pid, e.wager, e.answer.clone(), e.correct, e.revealed))
+            .collect()
+    }
+
+    const FINAL_CATEGORY: &str = "Wisconsin Rivers";
+    const FINAL_CLUE: &str = "This river flows through Madison's lakes";
+    const FINAL_RESPONSE: &str = "What is the Yahara?";
+
+    fn final_json() -> serde_json::Value {
+        serde_json::json!({
+            "category": FINAL_CATEGORY,
+            "question": FINAL_CLUE,
+            "answer": FINAL_RESPONSE,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_full_game_with_final_jeopardy() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [{"title": "Single", "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": 200},
+                    {"question": "Question 2", "answer": "Answer 2", "value": 400, "dailyDouble": true},
+                ]}],
+                "doubleCategories": [{"title": "Double", "questions": [
+                    {"question": "Question 3", "answer": "Answer 3", "value": 400},
+                    {"question": "Question 4", "answer": "Answer 4", "value": 800},
+                ]}],
+                "final": final_json(),
+            }),
+        )
+        .await;
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert!(room.final_question.is_some(), "Room should have a Final");
+            room.host_token.clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+        let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        // The host chooses AJ to pick first, and AJ answers the first clue (+200)
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
+        play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
+        let _ = recv_msgs(&mut sam_ws).await;
+
+        // AJ finds the Daily Double and wins the wager (+300 = 500)
+        let host_msgs = send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 1,
+            },
+        )
+        .await;
+        assert_eq!(
+            last_game_state(&host_msgs),
+            Some((GameState::DailyDoubleWager, None, Some(aj_id), None))
+        );
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 300 }).await;
+        assert_eq!(
+            last_game_state(&recv_msgs(&mut host_ws).await),
+            Some((GameState::Answer, Some(aj_id), Some(aj_id), Some(300)))
+        );
+        send_cmd(&mut host_ws, &GameCommand::HostChecked { correct: true }).await;
+        send_cmd(&mut host_ws, &GameCommand::HostContinue).await;
+
+        // That clears the board, so Double Jeopardy starts with Sam, in last place, picking
+        assert_eq!(
+            last_game_state(&recv_msgs(&mut host_ws).await),
+            Some((GameState::Selection, None, Some(sam_id), None))
+        );
+        let _ = recv_msgs(&mut aj_ws).await;
+        let _ = recv_msgs(&mut sam_ws).await;
+
+        // Sam answers a Double Jeopardy clue (+800)
+        play_question(&mut host_ws, &mut sam_ws, 0, 1, true).await;
+        let _ = recv_msgs(&mut aj_ws).await;
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 500);
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 800);
+        }
+
+        // Ending Double Jeopardy starts Final Jeopardy. The host sees the clue and the
+        // response, and the players only see the category.
+        let host_msgs =
+            send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostNextRound { round: 1 }).await;
+        let final_view = last_host_final(&host_msgs).expect("Host should see Final Jeopardy");
+        assert_eq!(
+            (
+                final_view.category.as_str(),
+                final_view.question.as_str(),
+                final_view.answer.as_str()
+            ),
+            (FINAL_CATEGORY, FINAL_CLUE, FINAL_RESPONSE)
+        );
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (aj_id, None, None, None, false),
+                (sam_id, None, None, None, false)
+            ]
+        );
+        let mut aj_texts = recv_texts(&mut aj_ws).await;
+        let mut sam_texts = recv_texts(&mut sam_ws).await;
+        assert_eq!(
+            last_public_state(&parse_all(&aj_texts)).map(|(state, ..)| state),
+            Some(GameState::FinalWager)
+        );
+        assert_eq!(
+            last_final_view(&parse_all(&aj_texts)),
+            Some((
+                Some(WagerRange { min: 0, max: 500 }),
+                None,
+                Some(FINAL_CATEGORY.to_string()),
+                false,
+                None,
+                None
+            ))
+        );
+
+        // Both wager, Sam after a wager above Sam's score is rejected
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 487 }).await;
+        send_cmd(&mut sam_ws, &GameCommand::SubmitWager { amount: 801 }).await;
+        let texts = recv_texts(&mut sam_ws).await;
+        assert!(
+            parse_all(&texts)
+                .iter()
+                .any(|m| matches!(m, GameEvent::Rejected { .. })),
+            "Sam's wager should be rejected: {texts:?}"
+        );
+        sam_texts.extend(texts);
+        send_cmd(&mut sam_ws, &GameCommand::SubmitWager { amount: 123 }).await;
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        assert_eq!(
+            last_final_view(&parse_all(&aj_texts)).map(|v| v.1),
+            Some(Some(487))
+        );
+        assert_eq!(
+            last_final_view(&parse_all(&sam_texts)).map(|v| v.1),
+            Some(Some(123))
+        );
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should see the wagers");
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (aj_id, Some(487), None, None, false),
+                (sam_id, Some(123), None, None, false)
+            ]
+        );
+
+        // The clue is revealed, and both respond
+        send_cmd(&mut host_ws, &GameCommand::HostRevealFinalClue).await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let texts = recv_texts(&mut aj_ws).await;
+        assert_eq!(
+            last_final_view(&parse_all(&texts)),
+            Some((
+                None,
+                Some(487),
+                Some(FINAL_CLUE.to_string()),
+                true,
+                None,
+                None
+            ))
+        );
+        aj_texts.extend(texts);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        send_cmd(
+            &mut aj_ws,
+            &GameCommand::SubmitAnswer {
+                answer: "  Yahara River ".to_string(),
+            },
+        )
+        .await;
+        send_cmd(
+            &mut sam_ws,
+            &GameCommand::SubmitAnswer {
+                answer: "What is the Wisconsin?".to_string(),
+            },
+        )
+        .await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        assert_eq!(
+            last_final_view(&parse_all(&aj_texts)).and_then(|v| v.4),
+            Some("Yahara River".to_string())
+        );
+
+        // The responses are locked, and revealed from the lowest score up: AJ, then Sam
+        send_cmd(&mut host_ws, &GameCommand::HostLockFinalAnswers).await;
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should see the responses");
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (
+                    aj_id,
+                    Some(487),
+                    Some("Yahara River".to_string()),
+                    None,
+                    false
+                ),
+                (
+                    sam_id,
+                    Some(123),
+                    Some("What is the Wisconsin?".to_string()),
+                    None,
+                    false
+                )
+            ]
+        );
+        // A double click on each button only acts once
+        for cmd in [
+            GameCommand::HostRevealFinalResponse { pid: aj_id },
+            GameCommand::HostRevealFinalResponse { pid: aj_id },
+            GameCommand::HostChecked { correct: true },
+            GameCommand::HostChecked { correct: true },
+            GameCommand::HostRevealFinalResponse { pid: sam_id },
+            GameCommand::HostChecked { correct: false },
+        ] {
+            send_cmd(&mut host_ws, &cmd).await;
+        }
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should see the results");
+        assert_eq!(final_view.reveal_index, 2);
+        assert_eq!(
+            host_final_entries(&final_view)
+                .into_iter()
+                .map(|(pid, _, _, correct, revealed)| (pid, correct, revealed))
+                .collect::<Vec<_>>(),
+            vec![(aj_id, Some(true), true), (sam_id, Some(false), true)]
+        );
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        assert_eq!(
+            last_final_view(&parse_all(&aj_texts)).and_then(|v| v.5),
+            Some(true),
+            "AJ is told AJ was right"
+        );
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 987);
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 677);
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.winner, None, "Nobody wins until the host finishes");
+        }
+
+        // The host finishes the game
+        let host_msgs = send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostContinue).await;
+        let game_end = host_msgs.iter().rev().find_map(|m| match m {
+            GameEvent::GameState { state, winner, .. } => Some((state.clone(), *winner)),
+            _ => None,
+        });
+        assert_eq!(game_end, Some((GameState::GameEnd, Some(aj_id))));
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        assert_eq!(
+            last_public_state(&parse_all(&sam_texts)).map(|(state, ..)| state),
+            Some(GameState::GameEnd)
+        );
+
+        // Neither player is ever sent the correct response, or the other's wager or response
+        for (texts, own_wagers, other_response) in [
+            (&aj_texts, [300, 487], "What is the Wisconsin?"),
+            (&sam_texts, [123, 123], "Yahara River"),
+        ] {
+            for text in texts {
+                assert!(!text.contains(FINAL_RESPONSE), "Response sent: {text}");
+                assert!(!text.contains(other_response), "Response sent: {text}");
+            }
+            for msg in parse_all(texts) {
+                if let GameEvent::PlayerState { wager: Some(w), .. } = msg {
+                    assert!(own_wagers.contains(&w), "Another wager sent: {w}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_final_jeopardy_survives_reconnects_and_late_joins() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [{"title": "Single", "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": 200},
+                ]}],
+                "final": final_json(),
+            }),
+        )
+        .await;
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+        let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let aj_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            room.players[0].player.token.clone()
+        };
+
+        // Clearing the only round's board goes straight to Final Jeopardy
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
+        play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
+        let _ = recv_msgs(&mut sam_ws).await;
+        {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.state, GameState::FinalWager);
+        }
+
+        // Someone joins during the wager, and plays for $1
+        let (mut early_ws, early_id) = add_player(port, &room_code, "Early").await;
+        let msgs = recv_msgs(&mut early_ws).await;
+        assert!(
+            msgs.is_empty(),
+            "add_player already read the join: {msgs:?}"
+        );
+        let host_msgs = recv_msgs(&mut host_ws).await;
+        let final_view = last_host_final(&host_msgs).expect("Host should see the new player");
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (aj_id, None, None, None, false),
+                (sam_id, Some(1), None, None, false),
+                (early_id, Some(1), None, None, false)
+            ]
+        );
+
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 200 }).await;
+        send_cmd(&mut host_ws, &GameCommand::HostRevealFinalClue).await;
+        let _ = recv_msgs(&mut host_ws).await;
+        send_cmd(
+            &mut aj_ws,
+            &GameCommand::SubmitAnswer {
+                answer: "Yahara".to_string(),
+            },
+        )
+        .await;
+        let _ = recv_msgs(&mut aj_ws).await;
+
+        // AJ's phone drops after responding, and comes back with the response
+        drop(aj_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut aj_ws = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", aj_token, aj_id),
+        )
+        .await;
+        let msgs = recv_msgs(&mut aj_ws).await;
+        assert_eq!(
+            last_public_state(&msgs).map(|(state, ..)| state),
+            Some(GameState::FinalAnswer)
+        );
+        assert_eq!(
+            last_final_view(&msgs),
+            Some((
+                None,
+                Some(200),
+                Some(FINAL_CLUE.to_string()),
+                true,
+                Some("Yahara".to_string()),
+                None
+            )),
+            "AJ's wager and response should be restored"
+        );
+
+        // Someone joins during the clue, and plays for $1
+        let mut later_ws = connect_ws_client(port, &room_code, "?playerName=Later").await;
+        let msgs = recv_msgs(&mut later_ws).await;
+        assert_eq!(
+            last_final_view(&msgs),
+            Some((
+                None,
+                Some(1),
+                Some(FINAL_CLUE.to_string()),
+                true,
+                None,
+                None
+            ))
+        );
+        let later_id = msgs
+            .iter()
+            .find_map(|m| match m {
+                GameEvent::NewPlayer { pid, .. } => Some(*pid),
+                _ => None,
+            })
+            .expect("Later should be told their pid");
+        send_cmd(
+            &mut later_ws,
+            &GameCommand::SubmitAnswer {
+                answer: "Wisconsin".to_string(),
+            },
+        )
+        .await;
+        let _ = recv_msgs(&mut later_ws).await;
+
+        // Everyone at $0 is revealed before AJ, in the order they joined
+        send_cmd(&mut host_ws, &GameCommand::HostLockFinalAnswers).await;
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should see the responses");
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (sam_id, Some(1), Some(String::new()), None, false),
+                (early_id, Some(1), Some(String::new()), None, false),
+                (
+                    later_id,
+                    Some(1),
+                    Some("Wisconsin".to_string()),
+                    None,
+                    false
+                ),
+                (aj_id, Some(200), Some("Yahara".to_string()), None, false),
+            ]
+        );
+
+        // Someone joins during the reveal, and only watches
+        let mut latest_ws = connect_ws_client(port, &room_code, "?playerName=Latest").await;
+        let msgs = recv_msgs(&mut latest_ws).await;
+        assert_eq!(
+            last_public_state(&msgs).map(|(state, ..)| state),
+            Some(GameState::FinalReveal)
+        );
+        assert_eq!(
+            last_final_view(&msgs),
+            Some((None, None, None, false, None, None))
+        );
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should be told");
+        assert_eq!(final_view.entries.len(), 4, "Latest isn't in the reveal");
+
+        // The host reconnects in the middle of the reveal
+        send_cmd(
+            &mut host_ws,
+            &GameCommand::HostRevealFinalResponse { pid: sam_id },
+        )
+        .await;
+        sleep(Duration::from_millis(100)).await;
+        drop(host_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let final_view = last_host_final(&recv_msgs(&mut host_ws).await)
+            .expect("Reconnecting host should see Final Jeopardy");
+        assert_eq!(final_view.reveal_index, 0);
+        assert_eq!(
+            host_final_entries(&final_view)[0],
+            (sam_id, Some(1), Some(String::new()), None, true)
+        );
     }
 
     #[tokio::test]
