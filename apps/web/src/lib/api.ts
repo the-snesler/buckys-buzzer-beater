@@ -8,7 +8,10 @@ export interface CreateRoomResponse {
 }
 
 export interface CreateRoomOptions {
+  /** The Jeopardy round's board */
   categories?: Category[];
+  /** The Double Jeopardy round's board. Empty or omitted if the game has none. */
+  doubleCategories?: Category[];
 }
 
 export async function createRoom(options: CreateRoomOptions = {}): Promise<CreateRoomResponse> {
