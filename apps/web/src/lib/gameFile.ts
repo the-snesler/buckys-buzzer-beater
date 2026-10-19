@@ -12,6 +12,10 @@ import type { Category, Question } from "../types/game";
  *   }
  * }
  * ```
+ *
+ * The Jeopardy round must be valid, since the game can't be played without it. A
+ * malformed Double Jeopardy or Final Jeopardy is left out with a warning instead, so
+ * that files with incomplete optional rounds (common in scraped games) still load.
  */
 
 /** A clue as the game is set up, including whether it hides a Daily Double */
@@ -35,11 +39,16 @@ export interface ParsedGame {
   /** Empty if the game has no Double Jeopardy */
   double: GameCategory[];
   final: FinalClue | null;
+  /** Problems with optional rounds that were left out of the game */
+  warnings: string[];
 }
 
 export class GameFileError extends Error {}
 
-/** Parses and validates the JSON of a game file. Throws a GameFileError if it's invalid. */
+/**
+ * Parses and validates the JSON of a game file. Throws a GameFileError if the Jeopardy
+ * round can't be played.
+ */
 export function parseGameFile(json: unknown): ParsedGame {
   const game = isObject(json) ? json.game : undefined;
   if (!isObject(game)) {
@@ -47,19 +56,37 @@ export function parseGameFile(json: unknown): ParsedGame {
   }
 
   if (!Array.isArray(game.single) || game.single.length === 0) {
-    throw new GameFileError("Invalid format: expected a non-empty game.single array");
+    throw new GameFileError('Invalid format: expected a non-empty "game.single" list of categories');
   }
-  const single = parseRound(game.single, "game.single");
+  let single: GameCategory[];
+  try {
+    single = parseRound(game.single);
+  } catch (err) {
+    if (err instanceof GameFileError) {
+      throw new GameFileError(`Jeopardy round: ${err.message}`);
+    }
+    throw err;
+  }
+
+  const warnings: string[] = [];
 
   let double: GameCategory[] = [];
-  if (game.double !== undefined && game.double !== null) {
-    if (!Array.isArray(game.double)) {
-      throw new GameFileError("Invalid format: game.double must be an array");
-    }
-    double = parseRound(game.double, "game.double");
+  try {
+    double = parseDouble(game.double);
+  } catch (err) {
+    if (!(err instanceof GameFileError)) throw err;
+    warnings.push(`Double Jeopardy skipped: ${err.message}`);
   }
 
-  return { single, double, final: parseFinal(game.final) };
+  let final: FinalClue | null = null;
+  try {
+    final = parseFinal(game.final);
+  } catch (err) {
+    if (!(err instanceof GameFileError)) throw err;
+    warnings.push(`Final Jeopardy skipped: ${err.message}`);
+  }
+
+  return { single, double, final, warnings };
 }
 
 /** Builds a game from categories that have no Daily Doubles, such as the Game Builder's */
@@ -71,6 +98,7 @@ export function gameFromCategories(categories: Category[]): ParsedGame {
     })),
     double: [],
     final: null,
+    warnings: [],
   };
 }
 
@@ -96,38 +124,54 @@ export function describeGame(game: ParsedGame): string {
   return game.double.length > 0 ? `${categories} + Double Jeopardy` : categories;
 }
 
-function parseRound(round: unknown[], path: string): GameCategory[] {
+function parseDouble(double: unknown): GameCategory[] {
+  if (double === undefined || double === null) {
+    return [];
+  }
+  if (!Array.isArray(double)) {
+    throw new GameFileError('"game.double" is not a list of categories');
+  }
+  return parseRound(double);
+}
+
+/** Parses a round's categories. Error messages count categories and clues from 1. */
+function parseRound(round: unknown[]): GameCategory[] {
   return round.map((category, catIdx) => {
-    const categoryPath = `${path}[${catIdx}]`;
-    if (
-      !isObject(category) ||
-      !isNonEmptyString(category.category) ||
-      !Array.isArray(category.clues) ||
-      category.clues.length === 0
-    ) {
-      throw new GameFileError(
-        `Invalid category at ${categoryPath}: expected a "category" name and a non-empty "clues" array`
-      );
+    const where = `Category ${catIdx + 1}`;
+    if (!isObject(category)) {
+      throw new GameFileError(`${where} is not a category`);
+    }
+    if (!isNonEmptyString(category.category)) {
+      throw new GameFileError(`${where} has no name`);
+    }
+    if (!Array.isArray(category.clues) || category.clues.length === 0) {
+      throw new GameFileError(`${where} has no clues`);
     }
 
     return {
       title: category.category,
       questions: category.clues.map((clue, clueIdx) =>
-        parseClue(clue, `${categoryPath}.clues[${clueIdx}]`)
+        parseClue(clue, `${where}, clue ${clueIdx + 1}`)
       ),
     };
   });
 }
 
-function parseClue(clue: unknown, path: string): GameQuestion {
-  if (!isObject(clue) || !isNonEmptyString(clue.clue) || !isNonEmptyString(clue.solution)) {
-    throw new GameFileError(`Invalid clue at ${path}: expected a "clue" and a "solution"`);
+function parseClue(clue: unknown, where: string): GameQuestion {
+  if (!isObject(clue)) {
+    throw new GameFileError(`${where} is not a clue`);
+  }
+  if (!isNonEmptyString(clue.clue)) {
+    throw new GameFileError(`${where} has no clue text`);
+  }
+  if (!isNonEmptyString(clue.solution)) {
+    throw new GameFileError(`${where} has no solution`);
   }
   if (typeof clue.value !== "number" || !Number.isInteger(clue.value) || clue.value < 0) {
-    throw new GameFileError(`Invalid clue at ${path}: "value" must be a whole number of dollars`);
+    throw new GameFileError(`${where} has an invalid value (it must be a whole number of dollars)`);
   }
   if (clue.dailyDouble !== undefined && typeof clue.dailyDouble !== "boolean") {
-    throw new GameFileError(`Invalid clue at ${path}: "dailyDouble" must be true or false`);
+    throw new GameFileError(`${where} has an invalid "dailyDouble" (it must be true or false)`);
   }
 
   return {
@@ -144,20 +188,20 @@ function parseFinal(final: unknown): FinalClue | null {
     return null;
   }
   if (!isObject(final)) {
-    throw new GameFileError("Invalid format: game.final must be an object");
+    throw new GameFileError('"game.final" is not an object');
   }
   // A Final Jeopardy without a clue means the game has none
-  if (final.clue === undefined || final.clue === "") {
+  if (final.clue === undefined || (typeof final.clue === "string" && final.clue.trim() === "")) {
     return null;
   }
-  if (
-    !isNonEmptyString(final.category) ||
-    !isNonEmptyString(final.clue) ||
-    !isNonEmptyString(final.solution)
-  ) {
-    throw new GameFileError(
-      'Invalid Final Jeopardy: expected a "category", a "clue" and a "solution"'
-    );
+  if (!isNonEmptyString(final.clue)) {
+    throw new GameFileError("the clue is not text");
+  }
+  if (!isNonEmptyString(final.category)) {
+    throw new GameFileError("it has no category");
+  }
+  if (!isNonEmptyString(final.solution)) {
+    throw new GameFileError("it has no solution");
   }
 
   return { category: final.category, question: final.clue, answer: final.solution };

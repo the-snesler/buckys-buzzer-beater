@@ -252,6 +252,14 @@ export default function Lobby() {
                 </p>
               </div>
             )}
+
+            {game && game.warnings.length > 0 && (
+              <ul className="mt-2 space-y-1 text-yellow-200 bg-yellow-900/30 border-2 border-yellow-700 rounded-lg px-4 py-3 text-sm font-semibold break-words">
+                {game.warnings.map((warning) => (
+                  <li key={warning}>⚠ {warning}</li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <button
