@@ -71,6 +71,17 @@ pub struct Category {
     pub questions: Vec<Question>,
 }
 
+/// The Final Jeopardy clue, which everyone plays after the last round
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinalQuestion {
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub question: String,
+    #[serde(default)]
+    pub answer: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct RoomResponse {
     pub messages_to_host: Vec<GameEvent>,
@@ -154,6 +165,12 @@ pub enum GameState {
     Answer,
     AnswerReveal,
     WaitingForBuzz,
+    /// Final Jeopardy: everyone sees the category and wagers
+    FinalWager,
+    /// Final Jeopardy: everyone sees the clue and writes a response
+    FinalAnswer,
+    /// Final Jeopardy: the host reveals and judges each response in turn
+    FinalReveal,
     GameEnd,
 }
 

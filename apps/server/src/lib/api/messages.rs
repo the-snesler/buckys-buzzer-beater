@@ -65,9 +65,23 @@ pub enum GameCommand {
     HostSetPicker {
         pid: PlayerId,
     },
-    /// A player's wager on the Daily Double they chose
+    /// A player's wager on the Daily Double they chose, or on Final Jeopardy
     SubmitWager {
         amount: u32,
+    },
+    /// A player's written response to the Final Jeopardy clue. It can be changed until the
+    /// host locks the responses.
+    SubmitAnswer {
+        answer: String,
+    },
+    /// Shows everyone the Final Jeopardy clue, which closes the wagers
+    HostRevealFinalClue,
+    /// Closes the Final Jeopardy responses, so the host can reveal them
+    HostLockFinalAnswers,
+    /// Shows everyone `pid`'s Final Jeopardy response. Ignored unless `pid` is the next
+    /// player to be revealed, so a repeated click can't skip anyone.
+    HostRevealFinalResponse {
+        pid: PlayerId,
     },
     Heartbeat {
         hbid: u32,
@@ -122,9 +136,13 @@ impl GameCommand {
             | Self::HostSkip
             | Self::HostContinue
             | Self::HostNextRound { .. }
-            | Self::HostSetPicker { .. } => true,
+            | Self::HostSetPicker { .. }
+            | Self::HostRevealFinalClue
+            | Self::HostLockFinalAnswers
+            | Self::HostRevealFinalResponse { .. } => true,
             Self::Buzz { .. }
             | Self::SubmitWager { .. }
+            | Self::SubmitAnswer { .. }
             | Self::Heartbeat { .. }
             | Self::LatencyOfHeartbeat { .. } => false,
         }
@@ -144,6 +162,10 @@ impl GameCommand {
             Self::HostNextRound { .. } => "HostNextRound",
             Self::HostSetPicker { .. } => "HostSetPicker",
             Self::SubmitWager { .. } => "SubmitWager",
+            Self::SubmitAnswer { .. } => "SubmitAnswer",
+            Self::HostRevealFinalClue => "HostRevealFinalClue",
+            Self::HostLockFinalAnswers => "HostLockFinalAnswers",
+            Self::HostRevealFinalResponse { .. } => "HostRevealFinalResponse",
             Self::Heartbeat { .. } => "Heartbeat",
             Self::LatencyOfHeartbeat { .. } => "LatencyOfHeartbeat",
         }
@@ -178,6 +200,35 @@ impl WagerRange {
     }
 }
 
+/// Final Jeopardy as the host sees it, see [`GameEvent::GameState`]. The host forwards
+/// this to the display, which must only show the wagers and responses of entries that have
+/// been `revealed`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct FinalView {
+    pub category: String,
+    pub question: String,
+    pub answer: String,
+    /// Every player in Final Jeopardy: by pid until the responses are locked, then in the
+    /// order they are revealed
+    pub entries: Vec<FinalEntryView>,
+    /// Index into `entries` of the next response to reveal or judge. Equal to the number of
+    /// entries once every response has been judged.
+    #[serde(rename = "revealIndex")]
+    pub reveal_index: usize,
+}
+
+/// One player's Final Jeopardy wager and response
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct FinalEntryView {
+    pub pid: PlayerId,
+    pub wager: Option<u32>,
+    pub answer: Option<String>,
+    /// How the host judged the response, once they have
+    pub correct: Option<bool>,
+    /// Whether the response has been shown to everyone
+    pub revealed: bool,
+}
+
 /// Events sent from server to clients.
 ///
 /// # Examples
@@ -194,6 +245,9 @@ impl WagerRange {
 ///     wager_range: None,
 ///     wager: None,
 ///     prompt: None,
+///     can_answer: false,
+///     answer: None,
+///     correct: None,
 /// };
 /// let json = serde_json::to_string(&event).unwrap();
 /// assert!(json.contains("PlayerState"));
@@ -238,6 +292,13 @@ pub enum GameEvent {
         /// The picker's wager on the Daily Double being played, once they've made it
         #[serde(rename = "ddWager")]
         dd_wager: Option<u32>,
+        /// Whether the game ends with Final Jeopardy
+        #[serde(rename = "hasFinal")]
+        has_final: bool,
+        /// Final Jeopardy, from when it starts. It includes the clue, the correct response,
+        /// and every wager and response, so the display must only show what's revealed.
+        #[serde(rename = "final")]
+        final_jeopardy: Option<FinalView>,
         winner: Option<PlayerId>,
     },
     /// The part of the game state every player may see. Players receive this instead of
@@ -259,10 +320,18 @@ pub enum GameEvent {
         /// Set while this player must make a wager, which is then accepted in this range
         #[serde(rename = "wagerRange")]
         wager_range: Option<WagerRange>,
-        /// This player's wager on the clue being played
+        /// This player's wager on the clue being played, or on Final Jeopardy
         wager: Option<u32>,
-        /// What this player is wagering or answering on, such as the Daily Double's category
+        /// What this player is wagering or answering on: the Daily Double's category, the
+        /// Final Jeopardy category while wagering, or the Final Jeopardy clue after that
         prompt: Option<String>,
+        /// Whether this player may write a response to the Final Jeopardy clue now
+        #[serde(rename = "canAnswer")]
+        can_answer: bool,
+        /// This player's own response to the Final Jeopardy clue, once they've sent one
+        answer: Option<String>,
+        /// How the host judged this player's own Final Jeopardy response, once they have
+        correct: Option<bool>,
     },
     /// Sent to one player when a command of theirs was refused, such as a wager out of
     /// range, so they can be told why
@@ -279,7 +348,7 @@ pub enum GameEvent {
 mod test {
     use crate::{
         Player,
-        api::messages::{GameCommand, GameEvent, Sender, WagerRange},
+        api::messages::{FinalEntryView, FinalView, GameCommand, GameEvent, Sender, WagerRange},
         game::GameState,
         net::connection::PlayerToken,
     };
@@ -337,6 +406,28 @@ mod test {
                 name: "SubmitWager",
                 json: r#"{"type": "SubmitWager", "amount": 1500}"#,
                 expected: GameCommand::SubmitWager { amount: 1500 },
+            },
+            TestCase {
+                name: "SubmitAnswer",
+                json: r#"{"type": "SubmitAnswer", "answer": "What is Madison?"}"#,
+                expected: GameCommand::SubmitAnswer {
+                    answer: "What is Madison?".to_string(),
+                },
+            },
+            TestCase {
+                name: "HostRevealFinalClue",
+                json: r#"{"type": "HostRevealFinalClue"}"#,
+                expected: GameCommand::HostRevealFinalClue,
+            },
+            TestCase {
+                name: "HostLockFinalAnswers",
+                json: r#"{"type": "HostLockFinalAnswers"}"#,
+                expected: GameCommand::HostLockFinalAnswers,
+            },
+            TestCase {
+                name: "HostRevealFinalResponse",
+                json: r#"{"type": "HostRevealFinalResponse", "pid": 3}"#,
+                expected: GameCommand::HostRevealFinalResponse { pid: 3 },
             },
             TestCase {
                 name: "HostChoice",
@@ -424,6 +515,18 @@ mod test {
                 json: r#"{"type": "SubmitWager", "amount": 5.5}"#,
             },
             TestCase {
+                name: "SubmitAnswer without an answer",
+                json: r#"{"type": "SubmitAnswer"}"#,
+            },
+            TestCase {
+                name: "SubmitAnswer with a non-text answer",
+                json: r#"{"type": "SubmitAnswer", "answer": 42}"#,
+            },
+            TestCase {
+                name: "HostRevealFinalResponse without a pid",
+                json: r#"{"type": "HostRevealFinalResponse"}"#,
+            },
+            TestCase {
                 name: "Empty JSON",
                 json: r#"{}"#,
             },
@@ -473,6 +576,8 @@ mod test {
                     current_buzzer: None,
                     picker: Some(3),
                     dd_wager: Some(1200),
+                    has_final: true,
+                    final_jeopardy: None,
                     winner: None,
                 },
                 expected_substrings: vec![
@@ -483,6 +588,43 @@ mod test {
                     r#""roundCount":2"#,
                     r#""picker":3"#,
                     r#""ddWager":1200"#,
+                    r#""hasFinal":true"#,
+                    r#""final":null"#,
+                ],
+            },
+            TestCase {
+                name: "GameState in Final Jeopardy",
+                event: GameEvent::GameState {
+                    state: GameState::FinalReveal,
+                    categories: vec![],
+                    round: 1,
+                    round_count: 2,
+                    players: vec![],
+                    current_question: None,
+                    current_buzzer: None,
+                    picker: None,
+                    dd_wager: None,
+                    has_final: true,
+                    final_jeopardy: Some(FinalView {
+                        category: "Rivers".to_string(),
+                        question: "It flows through Madison".to_string(),
+                        answer: "What is the Yahara?".to_string(),
+                        entries: vec![FinalEntryView {
+                            pid: 2,
+                            wager: Some(400),
+                            answer: Some("Yahara".to_string()),
+                            correct: Some(true),
+                            revealed: true,
+                        }],
+                        reveal_index: 1,
+                    }),
+                    winner: None,
+                },
+                expected_substrings: vec![
+                    r#""state":"finalReveal""#,
+                    r#""final":{"category":"Rivers","question":"It flows through Madison","answer":"What is the Yahara?""#,
+                    r#""entries":[{"pid":2,"wager":400,"answer":"Yahara","correct":true,"revealed":true}]"#,
+                    r#""revealIndex":1"#,
                 ],
             },
             TestCase {
@@ -495,6 +637,9 @@ mod test {
                     wager_range: None,
                     wager: None,
                     prompt: None,
+                    can_answer: false,
+                    answer: None,
+                    correct: None,
                 },
                 expected_substrings: vec![
                     r#""type":"PlayerState""#,
@@ -505,6 +650,9 @@ mod test {
                     r#""wagerRange":null"#,
                     r#""wager":null"#,
                     r#""prompt":null"#,
+                    r#""canAnswer":false"#,
+                    r#""answer":null"#,
+                    r#""correct":null"#,
                 ],
             },
             TestCase {
@@ -517,11 +665,35 @@ mod test {
                     wager_range: Some(WagerRange { min: 5, max: 1000 }),
                     wager: Some(600),
                     prompt: Some("Potent Potables".to_string()),
+                    can_answer: false,
+                    answer: None,
+                    correct: None,
                 },
                 expected_substrings: vec![
                     r#""wagerRange":{"min":5,"max":1000}"#,
                     r#""wager":600"#,
                     r#""prompt":"Potent Potables""#,
+                ],
+            },
+            TestCase {
+                name: "PlayerState answering Final Jeopardy",
+                event: GameEvent::PlayerState {
+                    pid: 1,
+                    buzzed: false,
+                    score: 0,
+                    can_buzz: false,
+                    wager_range: None,
+                    wager: Some(1),
+                    prompt: Some("It flows through Madison".to_string()),
+                    can_answer: true,
+                    answer: Some("Yahara".to_string()),
+                    correct: Some(false),
+                },
+                expected_substrings: vec![
+                    r#""wager":1"#,
+                    r#""canAnswer":true"#,
+                    r#""answer":"Yahara""#,
+                    r#""correct":false"#,
                 ],
             },
             TestCase {
@@ -639,6 +811,9 @@ mod test {
                 wager_range: None,
                 wager: None,
                 prompt: None,
+                can_answer: false,
+                answer: None,
+                correct: None,
             },
             GameEvent::PlayerState {
                 pid: 2,
@@ -648,6 +823,36 @@ mod test {
                 wager_range: Some(WagerRange { min: 5, max: 1000 }),
                 wager: Some(5),
                 prompt: Some("Rivers".to_string()),
+                can_answer: false,
+                answer: None,
+                correct: None,
+            },
+            GameEvent::PlayerState {
+                pid: 3,
+                buzzed: false,
+                score: 300,
+                can_buzz: false,
+                wager_range: Some(WagerRange { min: 0, max: 300 }),
+                wager: Some(0),
+                prompt: Some("Final category".to_string()),
+                can_answer: true,
+                answer: Some("".to_string()),
+                correct: Some(true),
+            },
+            GameEvent::PublicState {
+                state: GameState::FinalWager,
+                round: 1,
+                picker: None,
+            },
+            GameEvent::PublicState {
+                state: GameState::FinalAnswer,
+                round: 1,
+                picker: None,
+            },
+            GameEvent::PublicState {
+                state: GameState::FinalReveal,
+                round: 0,
+                picker: Some(1),
             },
             GameEvent::Rejected {
                 reason: "Wager at least $5".to_string(),
@@ -748,6 +953,28 @@ mod test {
                 should_witness: false,
             },
             TestCase {
+                name: "SubmitAnswer",
+                command: GameCommand::SubmitAnswer {
+                    answer: "Yahara".to_string(),
+                },
+                should_witness: false,
+            },
+            TestCase {
+                name: "HostRevealFinalClue",
+                command: GameCommand::HostRevealFinalClue,
+                should_witness: false,
+            },
+            TestCase {
+                name: "HostLockFinalAnswers",
+                command: GameCommand::HostLockFinalAnswers,
+                should_witness: false,
+            },
+            TestCase {
+                name: "HostRevealFinalResponse",
+                command: GameCommand::HostRevealFinalResponse { pid: 1 },
+                should_witness: false,
+            },
+            TestCase {
                 name: "Heartbeat",
                 command: GameCommand::Heartbeat {
                     hbid: 1,
@@ -830,6 +1057,28 @@ mod test {
                 name: "HostSetPicker",
                 command: GameCommand::HostSetPicker { pid: 1 },
                 host_command: true,
+            },
+            TestCase {
+                name: "HostRevealFinalClue",
+                command: GameCommand::HostRevealFinalClue,
+                host_command: true,
+            },
+            TestCase {
+                name: "HostLockFinalAnswers",
+                command: GameCommand::HostLockFinalAnswers,
+                host_command: true,
+            },
+            TestCase {
+                name: "HostRevealFinalResponse",
+                command: GameCommand::HostRevealFinalResponse { pid: 1 },
+                host_command: true,
+            },
+            TestCase {
+                name: "SubmitAnswer",
+                command: GameCommand::SubmitAnswer {
+                    answer: "Yahara".to_string(),
+                },
+                host_command: false,
             },
             TestCase {
                 name: "Buzz",

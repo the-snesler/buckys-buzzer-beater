@@ -98,7 +98,7 @@ fn register_new_player(room: &mut Room, name: String, tx: EventSender) -> Player
         &player.player.pid,
         room.players.len()
     );
-    room.players.push(player);
+    room.add_player(player);
 
     send_event(&tx, GameEvent::NewPlayer { pid: new_id, token });
     send_player_view(room, new_id, &tx);

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AppState, Room,
     api::handlers::RoomParams,
-    game::{Category, place_random_daily_doubles},
+    game::{Category, FinalQuestion, place_random_daily_doubles},
     net::connection::{HostToken, RoomCode},
 };
 
@@ -22,6 +22,7 @@ pub async fn create_room(
     Json(body): Json<CreateRoomRequest>,
 ) -> (StatusCode, Json<CreateRoomResponse>) {
     // Built before taking the lock, which every room shares
+    let final_question = body.final_question();
     let rounds = body.into_rounds(&mut rand::rng());
 
     let mut room_map = state.room_map.lock().await;
@@ -38,6 +39,7 @@ pub async fn create_room(
     let mut room = Room::new(code.clone(), host_token.clone());
 
     room.rounds = rounds;
+    room.final_question = final_question;
 
     room_map.insert(code.to_string(), room);
 
@@ -68,9 +70,20 @@ pub struct CreateRoomRequest {
     /// Whether to hide Daily Doubles at random in rounds whose clues have none
     #[serde(default, rename = "randomDailyDoubles")]
     random_daily_doubles: Option<bool>,
+    /// The Final Jeopardy clue. Null, omitted or without a clue if the game has none.
+    #[serde(default, rename = "final")]
+    final_question: Option<FinalQuestion>,
 }
 
 impl CreateRoomRequest {
+    /// The Final Jeopardy clue, if the game has one. A clue that is only whitespace counts
+    /// as none.
+    fn final_question(&self) -> Option<FinalQuestion> {
+        self.final_question
+            .clone()
+            .filter(|q| !q.question.trim().is_empty())
+    }
+
     /// The board of each round, in order. A game without Double Jeopardy has one round.
     fn into_rounds<R: Rng + ?Sized>(self, rng: &mut R) -> Vec<Vec<Category>> {
         let mut rounds = vec![self.categories.unwrap_or_default()];
@@ -136,6 +149,7 @@ mod test {
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::CreateRoomRequest;
+    use crate::game::FinalQuestion;
 
     #[test]
     fn test_create_room_request_rounds() {
@@ -193,6 +207,59 @@ mod test {
                 .map(|round| round.iter().map(|c| c.title.clone()).collect())
                 .collect();
             assert_eq!(titles, tc.expected_titles, "{}", tc.name);
+        }
+    }
+
+    #[test]
+    fn test_create_room_request_final() {
+        struct TestCase {
+            name: &'static str,
+            json: &'static str,
+            expected: Option<FinalQuestion>,
+        }
+
+        let final_question = || FinalQuestion {
+            category: "Rivers".to_string(),
+            question: "It flows through Madison".to_string(),
+            answer: "What is the Yahara?".to_string(),
+        };
+        let test_cases = vec![
+            TestCase {
+                name: "Omitted",
+                json: r#"{"categories": []}"#,
+                expected: None,
+            },
+            TestCase {
+                name: "Null",
+                json: r#"{"categories": [], "final": null}"#,
+                expected: None,
+            },
+            TestCase {
+                name: "Empty clue",
+                json: r#"{"final": {"category": "Rivers", "question": "", "answer": "A"}}"#,
+                expected: None,
+            },
+            TestCase {
+                name: "Blank clue",
+                json: r#"{"final": {"category": "Rivers", "question": "  ", "answer": "A"}}"#,
+                expected: None,
+            },
+            TestCase {
+                name: "No clue",
+                json: r#"{"final": {"category": "Rivers"}}"#,
+                expected: None,
+            },
+            TestCase {
+                name: "A Final Jeopardy clue",
+                json: r#"{"final": {"category": "Rivers", "question": "It flows through Madison", "answer": "What is the Yahara?"}}"#,
+                expected: Some(final_question()),
+            },
+        ];
+
+        for tc in test_cases {
+            let request: CreateRoomRequest = serde_json::from_str(tc.json)
+                .unwrap_or_else(|e| panic!("{}: failed to deserialize: {}", tc.name, e));
+            assert_eq!(request.final_question(), tc.expected, "{}", tc.name);
         }
     }
 

@@ -1,12 +1,13 @@
 use std::{
+    collections::BTreeMap,
     fmt,
     time::{Duration, SystemTime},
 };
 
 use crate::{
     HostEntry, Player, PlayerEntry, PlayerId,
-    api::messages::{GameCommand, GameEvent, Sender, WagerRange},
-    game::{Category, GameState, Question, RoomResponse},
+    api::messages::{FinalEntryView, FinalView, GameCommand, GameEvent, Sender, WagerRange},
+    game::{Category, FinalQuestion, GameState, Question, RoomResponse},
     net::connection::{HostToken, RoomCode, send_event},
 };
 
@@ -29,13 +30,65 @@ pub struct DailyDouble {
     pub wager: Option<u32>,
 }
 
-/// What a player is told about a wager they're making or have made, see
+/// The longest Final Jeopardy response kept, in characters. Anything longer is cut off.
+pub const FINAL_ANSWER_MAX_CHARS: usize = 200;
+
+/// One player's part in Final Jeopardy
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FinalEntry {
+    /// Filled in when the clue is revealed for anyone who didn't wager
+    pub wager: Option<u32>,
+    /// Filled in with "" when the responses are locked for anyone who didn't respond
+    pub answer: Option<String>,
+    pub correct: Option<bool>,
+    /// Whether the host has shown everyone this response
+    pub revealed: bool,
+}
+
+impl FinalEntry {
+    /// The entry of a player with `score` as Final Jeopardy starts. A player with nothing
+    /// to wager must wager exactly $1, so their wager is made for them.
+    fn new(score: i32) -> Self {
+        Self {
+            wager: (score <= 0).then_some(FINAL_FIXED_WAGER),
+            ..Self::default()
+        }
+    }
+}
+
+/// The wager of a player with a score of $0 or less, who has nothing to wager
+pub const FINAL_FIXED_WAGER: u32 = 1;
+
+/// Final Jeopardy being played, from when it starts until the game ends
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FinalRound {
+    /// Everyone playing, by pid. Players who join during the wager or the clue play too;
+    /// players who join after the responses are locked only watch.
+    pub entries: BTreeMap<PlayerId, FinalEntry>,
+    /// Who is revealed in which order, set when the responses are locked: lowest score
+    /// first, as on TV. Ties go to the lowest pid, the player who joined first.
+    pub reveal_order: Vec<PlayerId>,
+    /// Index into `reveal_order` of the next response to reveal and judge
+    pub reveal_index: usize,
+}
+
+impl FinalRound {
+    /// The pid of the next response to reveal or judge, if any are left
+    fn current(&self) -> Option<PlayerId> {
+        self.reveal_order.get(self.reveal_index).copied()
+    }
+}
+
+/// What a player is told about their wager and response on the clue being played, see
 /// [`GameEvent::PlayerState`]
 #[derive(Debug, Default, PartialEq)]
 struct WagerView {
     range: Option<WagerRange>,
     wager: Option<u32>,
     prompt: Option<String>,
+    can_answer: bool,
+    answer: Option<String>,
+    correct: Option<bool>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -66,6 +119,10 @@ pub struct Room {
     /// The Daily Double being played, from when it's chosen until the host moves on from
     /// the clue
     pub daily_double: Option<DailyDouble>,
+    /// The Final Jeopardy clue, if the game ends with one
+    pub final_question: Option<FinalQuestion>,
+    /// Final Jeopardy, once it has started
+    pub final_round: Option<FinalRound>,
     pub buzz_window: Option<BuzzWindow>,
     next_buzz_window_id: BuzzWindowId,
     pub last_activity: SystemTime,
@@ -87,6 +144,8 @@ impl fmt::Debug for Room {
             .field("current buzzer", &self.current_buzzer)
             .field("picker", &self.picker)
             .field("daily double", &self.daily_double)
+            .field("has final", &self.final_question.is_some())
+            .field("final round", &self.final_round)
             .field("buzz window", &self.buzz_window)
             .finish()
     }
@@ -106,6 +165,8 @@ impl Room {
             current_buzzer: None,
             picker: None,
             daily_double: None,
+            final_question: None,
+            final_round: None,
             buzz_window: None,
             next_buzz_window_id: 0,
             last_activity: SystemTime::now(),
@@ -211,8 +272,48 @@ impl Room {
             current_buzzer: self.current_buzzer,
             picker: self.picker,
             dd_wager: self.dd_wager(),
+            has_final: self.final_question.is_some(),
+            final_jeopardy: self.build_final_view(),
             winner: self.winner,
         }
+    }
+
+    /// Final Jeopardy as the host sees it, once it has started: the clue and the correct
+    /// response, so the host can read and judge them, and every wager and response, so
+    /// the host can see who is done. The host's display must only show what's revealed.
+    fn build_final_view(&self) -> Option<FinalView> {
+        let question = self.final_question.as_ref()?;
+        let final_round = self.final_round.as_ref()?;
+        let entry_view = |pid: PlayerId| {
+            let entry = final_round.entries.get(&pid)?;
+            Some(FinalEntryView {
+                pid,
+                wager: entry.wager,
+                answer: entry.answer.clone(),
+                correct: entry.correct,
+                revealed: entry.revealed,
+            })
+        };
+        let entries = if final_round.reveal_order.is_empty() {
+            final_round
+                .entries
+                .keys()
+                .filter_map(|&pid| entry_view(pid))
+                .collect()
+        } else {
+            final_round
+                .reveal_order
+                .iter()
+                .filter_map(|&pid| entry_view(pid))
+                .collect()
+        };
+        Some(FinalView {
+            category: question.category.clone(),
+            question: question.question.clone(),
+            answer: question.answer.clone(),
+            entries,
+            reveal_index: final_round.reveal_index,
+        })
     }
 
     /// The game state every player may see. Players never receive [`GameEvent::GameState`],
@@ -232,6 +333,9 @@ impl Room {
             range,
             wager,
             prompt,
+            can_answer,
+            answer,
+            correct,
         } = self.wager_view(player_id);
 
         Some(GameEvent::PlayerState {
@@ -242,6 +346,9 @@ impl Room {
             wager_range: range,
             wager,
             prompt,
+            can_answer,
+            answer,
+            correct,
         })
     }
 
@@ -252,8 +359,68 @@ impl Room {
             GameState::DailyDoubleWager | GameState::Answer | GameState::AnswerReveal => {
                 self.daily_double_view(player_id)
             }
-            _ => WagerView::default(),
+            GameState::FinalWager | GameState::FinalAnswer | GameState::FinalReveal => {
+                self.final_view(player_id)
+            }
+            GameState::Start
+            | GameState::Selection
+            | GameState::QuestionReading
+            | GameState::WaitingForBuzz
+            | GameState::GameEnd => WagerView::default(),
         }
+    }
+
+    /// Final Jeopardy as `player_id` sees it: only their own wager and response. The
+    /// prompt is the category while wagering and the clue after that. Players are never
+    /// sent the correct response. A player who joined after the responses were locked has
+    /// no entry and only watches.
+    fn final_view(&self, player_id: PlayerId) -> WagerView {
+        let (Some(question), Some(entry)) = (
+            self.final_question.as_ref(),
+            self.final_round
+                .as_ref()
+                .and_then(|f| f.entries.get(&player_id)),
+        ) else {
+            return WagerView::default();
+        };
+        let prompt = match self.state {
+            GameState::FinalWager => question.category.clone(),
+            _ => question.question.clone(),
+        };
+        WagerView {
+            range: self.final_wager_range(player_id),
+            wager: entry.wager,
+            prompt: Some(prompt),
+            can_answer: self.state == GameState::FinalAnswer,
+            answer: entry.answer.clone(),
+            correct: entry.correct,
+        }
+    }
+
+    /// The score of `player_id`, if they're in the room
+    fn score_of(&self, player_id: PlayerId) -> Option<i32> {
+        self.players
+            .iter()
+            .find(|p| p.player.pid == player_id)
+            .map(|p| p.player.score)
+    }
+
+    /// The wagers `player_id` may make on Final Jeopardy while wagers are open: anything
+    /// from $0 to their score. A player with a score of $0 or less has no choice, since
+    /// their wager is $1, so they get no range.
+    fn final_wager_range(&self, player_id: PlayerId) -> Option<WagerRange> {
+        if self.state != GameState::FinalWager
+            || !self
+                .final_round
+                .as_ref()
+                .is_some_and(|f| f.entries.contains_key(&player_id))
+        {
+            return None;
+        }
+        let max = u32::try_from(self.score_of(player_id)?)
+            .ok()
+            .filter(|&score| score > 0)?;
+        Some(WagerRange { min: 0, max })
     }
 
     /// The Daily Double as `player_id` sees it. Only the player who chose it wagers and
@@ -266,6 +433,7 @@ impl Room {
             range: self.dd_wager_range(player_id),
             wager: daily_double.wager,
             prompt: self.current_category().map(|cat| cat.title.clone()),
+            ..WagerView::default()
         }
     }
 
@@ -403,6 +571,14 @@ impl Room {
 
             GameCommand::SubmitWager { amount } => self.handle_submit_wager(sender, *amount),
 
+            GameCommand::SubmitAnswer { answer } => self.handle_submit_answer(sender, answer),
+
+            GameCommand::HostRevealFinalClue => self.handle_reveal_final_clue(),
+
+            GameCommand::HostLockFinalAnswers => self.handle_lock_final_answers(),
+
+            GameCommand::HostRevealFinalResponse { pid } => self.handle_reveal_final_response(*pid),
+
             GameCommand::Buzz { reaction_ms } => {
                 if let Sender::Player(player_id) = sender
                     && let Some(player_entry) =
@@ -438,11 +614,17 @@ impl Room {
                 self.broadcast_state()
             }
 
-            GameCommand::HostChecked { correct } => self.handle_host_checked(*correct),
+            GameCommand::HostChecked { correct } => match self.state {
+                GameState::FinalReveal => self.handle_final_judged(*correct),
+                _ => self.handle_host_checked(*correct),
+            },
 
             GameCommand::HostSkip => self.handle_host_skip(),
 
-            GameCommand::HostContinue => self.handle_host_continue(),
+            GameCommand::HostContinue => match self.state {
+                GameState::FinalReveal => self.handle_finish_final(),
+                _ => self.handle_host_continue(),
+            },
 
             GameCommand::HostNextRound { round } => {
                 // A stale second click must not end the round that the first one started
@@ -524,7 +706,10 @@ impl Room {
             GameCommand::HostChoice { .. } => self.state == GameState::Selection,
             GameCommand::HostReady => self.state == GameState::QuestionReading,
             GameCommand::Buzz { .. } => self.state == GameState::WaitingForBuzz,
-            GameCommand::HostChecked { .. } => self.state == GameState::Answer,
+            // In Final Jeopardy, this judges the response that was just revealed
+            GameCommand::HostChecked { .. } => {
+                matches!(self.state, GameState::Answer | GameState::FinalReveal)
+            }
             GameCommand::HostSkip => match self.state {
                 GameState::QuestionReading
                 | GameState::WaitingForBuzz
@@ -534,8 +719,20 @@ impl Room {
                 GameState::Answer => self.daily_double.is_some(),
                 _ => false,
             },
-            GameCommand::SubmitWager { .. } => self.state == GameState::DailyDoubleWager,
-            GameCommand::HostContinue => self.state == GameState::AnswerReveal,
+            GameCommand::SubmitWager { .. } => {
+                matches!(
+                    self.state,
+                    GameState::DailyDoubleWager | GameState::FinalWager
+                )
+            }
+            GameCommand::SubmitAnswer { .. } => self.state == GameState::FinalAnswer,
+            GameCommand::HostRevealFinalClue => self.state == GameState::FinalWager,
+            GameCommand::HostLockFinalAnswers => self.state == GameState::FinalAnswer,
+            GameCommand::HostRevealFinalResponse { .. } => self.state == GameState::FinalReveal,
+            // From Final Jeopardy, this ends the game once every response is judged
+            GameCommand::HostContinue => {
+                matches!(self.state, GameState::AnswerReveal | GameState::FinalReveal)
+            }
             // The picker can only be changed between clues. If the picker disconnects while
             // wagering on a Daily Double, the host's only way on is to skip it.
             GameCommand::HostNextRound { .. } | GameCommand::HostSetPicker { .. } => {
@@ -615,8 +812,259 @@ impl Room {
         };
         match self.state {
             GameState::DailyDoubleWager => self.handle_daily_double_wager(player_id, amount),
+            GameState::FinalWager => self.handle_final_wager(player_id, amount),
             _ => RoomResponse::new(),
         }
+    }
+
+    /// Accepts a player's Final Jeopardy wager. It can be changed until the clue is
+    /// revealed.
+    fn handle_final_wager(&mut self, player_id: PlayerId, amount: u32) -> RoomResponse {
+        let Some(score) = self.score_of(player_id) else {
+            return RoomResponse::new();
+        };
+        let range = match self.final_wager_range(player_id) {
+            Some(range) => range,
+            None if score <= 0 => {
+                if amount == FINAL_FIXED_WAGER {
+                    return self.update_player(player_id);
+                }
+                tracing::info!(
+                    room_code = %self.code,
+                    player_id,
+                    amount,
+                    score,
+                    "Rejecting a Final Jeopardy wager from a player with nothing to wager"
+                );
+                return reject(
+                    player_id,
+                    "With a score of $0 or less, your wager is $1".to_string(),
+                );
+            }
+            None => {
+                tracing::info!(
+                    room_code = %self.code,
+                    player_id,
+                    "Rejecting a Final Jeopardy wager from a player who isn't playing it"
+                );
+                return reject(
+                    player_id,
+                    "You joined too late to play Final Jeopardy".to_string(),
+                );
+            }
+        };
+        if !range.contains(amount) {
+            tracing::info!(
+                room_code = %self.code,
+                player_id,
+                amount,
+                ?range,
+                "Rejecting a Final Jeopardy wager out of range"
+            );
+            return reject(player_id, out_of_range_reason(range));
+        }
+
+        tracing::info!(room_code = %self.code, player_id, "Final Jeopardy wager");
+        if let Some(entry) = self.final_entry_mut(player_id) {
+            entry.wager = Some(amount);
+        }
+        self.update_player(player_id)
+    }
+
+    /// Accepts a player's Final Jeopardy response, trimmed and cut off at
+    /// [`FINAL_ANSWER_MAX_CHARS`]. It can be changed until the host locks the responses.
+    fn handle_submit_answer(&mut self, sender: Sender, answer: &str) -> RoomResponse {
+        let Sender::Player(player_id) = sender else {
+            return RoomResponse::new();
+        };
+        let answer: String = answer.trim().chars().take(FINAL_ANSWER_MAX_CHARS).collect();
+        // Cutting it off can leave whitespace at the end
+        let answer = answer.trim_end().to_string();
+        let Some(entry) = self.final_entry_mut(player_id) else {
+            tracing::info!(
+                room_code = %self.code,
+                player_id,
+                "Rejecting a Final Jeopardy response from a player who isn't playing it"
+            );
+            return reject(
+                player_id,
+                "You joined too late to play Final Jeopardy".to_string(),
+            );
+        };
+        entry.answer = Some(answer);
+        tracing::info!(room_code = %self.code, player_id, "Final Jeopardy response");
+        self.update_player(player_id)
+    }
+
+    fn final_entry_mut(&mut self, player_id: PlayerId) -> Option<&mut FinalEntry> {
+        self.final_round.as_mut()?.entries.get_mut(&player_id)
+    }
+
+    /// Tells the host and `player_id` about a change only `player_id` can see, such as
+    /// their Final Jeopardy wager. Nobody else's view changes, so nobody else is sent
+    /// anything, which also leaves other players' half-typed responses alone.
+    fn update_player(&self, player_id: PlayerId) -> RoomResponse {
+        let response = RoomResponse::to_host(self.build_game_state_msg());
+        match self.build_player_state_msg(player_id) {
+            Some(msg) => response.merge(RoomResponse::to_player(player_id, msg)),
+            None => response,
+        }
+    }
+
+    /// Starts Final Jeopardy: everyone in the room plays, and wagers on the category
+    fn enter_final(&mut self) {
+        let entries = self
+            .players
+            .iter()
+            .map(|p| (p.player.pid, FinalEntry::new(p.player.score)))
+            .collect();
+        self.final_round = Some(FinalRound {
+            entries,
+            ..FinalRound::default()
+        });
+        tracing::info!(
+            room_code = %self.code,
+            players = self.players.len(),
+            "Starting Final Jeopardy"
+        );
+        self.state = GameState::FinalWager;
+    }
+
+    /// Adds a player who joined the room. Anyone joining before the Final Jeopardy
+    /// responses are locked plays it, with nothing to wager, so for $1.
+    pub fn add_player(&mut self, entry: PlayerEntry) {
+        let pid = entry.player.pid;
+        let score = entry.player.score;
+        self.players.push(entry);
+        if matches!(self.state, GameState::FinalWager | GameState::FinalAnswer)
+            && let Some(final_round) = &mut self.final_round
+        {
+            final_round
+                .entries
+                .entry(pid)
+                .or_insert_with(|| FinalEntry::new(score));
+        }
+    }
+
+    /// Closes the wagers and shows everyone the clue. Anyone who didn't wager wagers
+    /// nothing, or $1 if that's all they could wager.
+    fn handle_reveal_final_clue(&mut self) -> RoomResponse {
+        let scores: Vec<(PlayerId, i32)> = self
+            .players
+            .iter()
+            .map(|p| (p.player.pid, p.player.score))
+            .collect();
+        if let Some(final_round) = &mut self.final_round {
+            for (pid, score) in scores {
+                if let Some(entry) = final_round.entries.get_mut(&pid) {
+                    entry
+                        .wager
+                        .get_or_insert(if score > 0 { 0 } else { FINAL_FIXED_WAGER });
+                }
+            }
+        }
+        tracing::info!(room_code = %self.code, "Final Jeopardy clue revealed");
+        self.state = GameState::FinalAnswer;
+        self.broadcast_state()
+    }
+
+    /// Closes the responses, with an empty one for anyone who didn't respond, and decides
+    /// the order they're revealed in: lowest score first, ties to the lowest pid
+    fn handle_lock_final_answers(&mut self) -> RoomResponse {
+        let mut order: Vec<(i32, PlayerId)> = self
+            .players
+            .iter()
+            .map(|p| (p.player.score, p.player.pid))
+            .collect();
+        order.sort_unstable();
+        if let Some(final_round) = &mut self.final_round {
+            for entry in final_round.entries.values_mut() {
+                entry.answer.get_or_insert_with(String::new);
+            }
+            final_round.reveal_order = order
+                .into_iter()
+                .map(|(_, pid)| pid)
+                .filter(|pid| final_round.entries.contains_key(pid))
+                .collect();
+            final_round.reveal_index = 0;
+        }
+        tracing::info!(room_code = %self.code, "Final Jeopardy responses locked");
+        self.state = GameState::FinalReveal;
+        self.broadcast_state()
+    }
+
+    /// Shows everyone `pid`'s response, if they're next to be revealed and haven't been
+    fn handle_reveal_final_response(&mut self, pid: PlayerId) -> RoomResponse {
+        let Some(final_round) = &mut self.final_round else {
+            return RoomResponse::new();
+        };
+        let Some(entry) = final_round
+            .current()
+            .filter(|&current| current == pid)
+            .and_then(|current| final_round.entries.get_mut(&current))
+            .filter(|entry| !entry.revealed)
+        else {
+            tracing::info!(
+                room_code = %self.code,
+                pid,
+                next = ?final_round.current(),
+                "Ignoring a reveal of a response that isn't next"
+            );
+            return RoomResponse::new();
+        };
+        entry.revealed = true;
+        tracing::info!(room_code = %self.code, pid, "Final Jeopardy response revealed");
+        self.broadcast_state()
+    }
+
+    /// Judges the response that was just revealed, moves its player's score by their
+    /// wager, and moves on to the next one. A response must be revealed before it's
+    /// judged, so a repeated click can't judge the next player too.
+    fn handle_final_judged(&mut self, correct: bool) -> RoomResponse {
+        let Some(final_round) = &mut self.final_round else {
+            return RoomResponse::new();
+        };
+        let Some((pid, entry)) = final_round
+            .current()
+            .and_then(|pid| Some((pid, final_round.entries.get_mut(&pid)?)))
+            .filter(|(_, entry)| entry.revealed && entry.correct.is_none())
+        else {
+            tracing::info!(
+                room_code = %self.code,
+                next = ?final_round.current(),
+                "Ignoring a judgement before the next response was revealed"
+            );
+            return RoomResponse::new();
+        };
+        entry.correct = Some(correct);
+        let stake = i32::try_from(entry.wager.unwrap_or(0)).unwrap_or(i32::MAX);
+        final_round.reveal_index += 1;
+
+        if let Some(player) = self.players.iter_mut().find(|p| p.player.pid == pid) {
+            player.player.score = if correct {
+                player.player.score.saturating_add(stake)
+            } else {
+                player.player.score.saturating_sub(stake)
+            };
+        }
+        tracing::info!(room_code = %self.code, pid, correct, "Final Jeopardy response judged");
+        self.broadcast_state()
+    }
+
+    /// Ends the game once every Final Jeopardy response has been judged
+    fn handle_finish_final(&mut self) -> RoomResponse {
+        if let Some(next) = self.final_round.as_ref().and_then(FinalRound::current) {
+            tracing::info!(
+                room_code = %self.code,
+                next,
+                "Ignoring HostContinue before every Final Jeopardy response was judged"
+            );
+            return RoomResponse::new();
+        }
+        self.determine_winner();
+        tracing::info!(room_code = %self.code, winner = ?self.winner, "Game ended");
+        self.state = GameState::GameEnd;
+        self.broadcast_state()
     }
 
     /// Accepts the wager on a Daily Double from the player who chose it, and has them
@@ -688,13 +1136,15 @@ impl Room {
     }
 
     /// Moves on from the current round, whether or not its board is cleared: to the next
-    /// round with clues to play if there is one, otherwise to the end of the game
+    /// round with clues to play if there is one, otherwise to Final Jeopardy or the end of
+    /// the game
     fn finish_round(&mut self) {
         self.enter_round(self.round_index + 1);
     }
 
     /// Starts the first round from `first` on that has a clue left to play, skipping
-    /// empty rounds. If there is none, the game ends.
+    /// empty rounds. If there is none, Final Jeopardy starts, or the game ends if it has
+    /// none.
     fn enter_round(&mut self, first: usize) {
         self.clear_clue();
 
@@ -714,6 +1164,8 @@ impl Room {
                 "Starting round"
             );
             self.state = GameState::Selection;
+        } else if self.final_question.is_some() {
+            self.enter_final();
         } else {
             self.determine_winner();
             self.state = GameState::GameEnd;
@@ -1603,6 +2055,50 @@ mod tests {
                 command: GameCommand::Buzz { reaction_ms: 100 },
                 sender: Sender::Host,
             },
+            TestCase {
+                name: "Host cannot wager on Final Jeopardy",
+                initial_state: GameState::FinalWager,
+                command: GameCommand::SubmitWager { amount: 0 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "Host cannot respond to Final Jeopardy",
+                initial_state: GameState::FinalAnswer,
+                command: GameCommand::SubmitAnswer {
+                    answer: "Yahara".to_string(),
+                },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "Player cannot reveal the Final Jeopardy clue",
+                initial_state: GameState::FinalWager,
+                command: GameCommand::HostRevealFinalClue,
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot lock the Final Jeopardy responses",
+                initial_state: GameState::FinalAnswer,
+                command: GameCommand::HostLockFinalAnswers,
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot reveal a Final Jeopardy response",
+                initial_state: GameState::FinalReveal,
+                command: GameCommand::HostRevealFinalResponse { pid: 1 },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot judge a Final Jeopardy response",
+                initial_state: GameState::FinalReveal,
+                command: GameCommand::HostChecked { correct: true },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot finish Final Jeopardy",
+                initial_state: GameState::FinalReveal,
+                command: GameCommand::HostContinue,
+                sender: Sender::Player(1),
+            },
         ];
 
         for tc in test_cases {
@@ -1611,6 +2107,9 @@ mod tests {
             room.state = tc.initial_state.clone();
             room.current_question = Some((0, 0));
             room.current_buzzer = Some(1);
+            room.final_question = Some(final_question());
+            let final_round = revealed_final_round(1);
+            room.final_round = Some(final_round.clone());
 
             let response = room.handle_command(&tc.command, tc.sender);
 
@@ -1633,6 +2132,12 @@ mod tests {
                 tc.name
             );
             assert_eq!(room.round_index, 0, "{}: round changed", tc.name);
+            assert_eq!(
+                room.final_round,
+                Some(final_round),
+                "{}: Final Jeopardy changed",
+                tc.name
+            );
         }
     }
 
@@ -1954,6 +2459,194 @@ mod tests {
                 command: GameCommand::HostSetPicker { pid: 2 },
                 sender: Sender::Host,
             },
+            TestCase {
+                name: "SubmitAnswer during Selection",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::SubmitAnswer {
+                    answer: "Yahara".to_string(),
+                },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "SubmitAnswer during a Daily Double",
+                initial_state: GameState::Answer,
+                setup: |_| {},
+                command: GameCommand::SubmitAnswer {
+                    answer: "Yahara".to_string(),
+                },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "SubmitAnswer during the Final Jeopardy wager",
+                initial_state: GameState::FinalWager,
+                setup: |_| {},
+                command: GameCommand::SubmitAnswer {
+                    answer: "Yahara".to_string(),
+                },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "SubmitAnswer after the responses were locked",
+                initial_state: GameState::FinalReveal,
+                setup: |_| {},
+                command: GameCommand::SubmitAnswer {
+                    answer: "Yahara".to_string(),
+                },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "SubmitAnswer after the game ended",
+                initial_state: GameState::GameEnd,
+                setup: |_| {},
+                command: GameCommand::SubmitAnswer {
+                    answer: "Yahara".to_string(),
+                },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "SubmitWager after the Final Jeopardy clue was revealed",
+                initial_state: GameState::FinalAnswer,
+                setup: |_| {},
+                command: GameCommand::SubmitWager { amount: 0 },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "SubmitWager while Final Jeopardy is revealed",
+                initial_state: GameState::FinalReveal,
+                setup: |_| {},
+                command: GameCommand::SubmitWager { amount: 0 },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "HostRevealFinalClue during Selection",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostRevealFinalClue,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostRevealFinalClue twice",
+                initial_state: GameState::FinalAnswer,
+                setup: |_| {},
+                command: GameCommand::HostRevealFinalClue,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostRevealFinalClue during the reveal",
+                initial_state: GameState::FinalReveal,
+                setup: |_| {},
+                command: GameCommand::HostRevealFinalClue,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostLockFinalAnswers before the clue was revealed",
+                initial_state: GameState::FinalWager,
+                setup: |_| {},
+                command: GameCommand::HostLockFinalAnswers,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostLockFinalAnswers twice",
+                initial_state: GameState::FinalReveal,
+                setup: |_| {},
+                command: GameCommand::HostLockFinalAnswers,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostLockFinalAnswers during a normal clue",
+                initial_state: GameState::Answer,
+                setup: |_| {},
+                command: GameCommand::HostLockFinalAnswers,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostRevealFinalResponse during the wager",
+                initial_state: GameState::FinalWager,
+                setup: |_| {},
+                command: GameCommand::HostRevealFinalResponse { pid: 1 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostRevealFinalResponse before the responses were locked",
+                initial_state: GameState::FinalAnswer,
+                setup: |_| {},
+                command: GameCommand::HostRevealFinalResponse { pid: 1 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostRevealFinalResponse after the game ended",
+                initial_state: GameState::GameEnd,
+                setup: |_| {},
+                command: GameCommand::HostRevealFinalResponse { pid: 1 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostChecked during the Final Jeopardy wager",
+                initial_state: GameState::FinalWager,
+                setup: |_| {},
+                command: GameCommand::HostChecked { correct: true },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostChecked before the responses were locked",
+                initial_state: GameState::FinalAnswer,
+                setup: |_| {},
+                command: GameCommand::HostChecked { correct: true },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostContinue during the Final Jeopardy wager",
+                initial_state: GameState::FinalWager,
+                setup: |_| {},
+                command: GameCommand::HostContinue,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostContinue before the responses were locked",
+                initial_state: GameState::FinalAnswer,
+                setup: |_| {},
+                command: GameCommand::HostContinue,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostNextRound during Final Jeopardy",
+                initial_state: GameState::FinalWager,
+                setup: |_| {},
+                command: GameCommand::HostNextRound { round: 0 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostSkip during Final Jeopardy",
+                initial_state: GameState::FinalAnswer,
+                setup: |_| {},
+                command: GameCommand::HostSkip,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostChoice during Final Jeopardy",
+                initial_state: GameState::FinalReveal,
+                setup: |_| {},
+                command: GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index: 1,
+                },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "Buzz during Final Jeopardy",
+                initial_state: GameState::FinalAnswer,
+                setup: |_| {},
+                command: GameCommand::Buzz { reaction_ms: 100 },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "HostSetPicker during Final Jeopardy",
+                initial_state: GameState::FinalWager,
+                setup: |room| add_test_player(room, 2, "Sam"),
+                command: GameCommand::HostSetPicker { pid: 2 },
+                sender: Sender::Host,
+            },
         ];
 
         for tc in test_cases {
@@ -1963,9 +2656,15 @@ mod tests {
             room.current_question = Some((0, 0));
             room.current_buzzer = Some(1);
             room.picker = Some(1);
+            room.final_question = Some(final_question());
+            room.final_round = Some(FinalRound {
+                entries: BTreeMap::from([(1, FinalEntry::new(0))]),
+                ..FinalRound::default()
+            });
             (tc.setup)(&mut room);
             let picker = room.picker;
             let daily_double = room.daily_double;
+            let final_round = room.final_round.clone();
 
             let response = room.handle_command(&tc.command, tc.sender);
 
@@ -1995,6 +2694,11 @@ mod tests {
                 tc.name
             );
             assert_eq!(room.round_index, 0, "{}: round changed", tc.name);
+            assert_eq!(
+                room.final_round, final_round,
+                "{}: Final Jeopardy changed",
+                tc.name
+            );
         }
     }
 
@@ -2363,6 +3067,82 @@ mod tests {
                 expected_state: GameState::GameEnd,
                 expected_round: 0,
             },
+            TestCase {
+                name: "Clearing the Double Jeopardy board starts Final Jeopardy",
+                create_room: create_final_room,
+                initial_state: GameState::AnswerReveal,
+                setup: |room| {
+                    room.round_index = 1;
+                    answer_round(room, 1);
+                    room.current_question = Some((0, 1));
+                },
+                command: GameCommand::HostContinue,
+                expected_state: GameState::FinalWager,
+                expected_round: 1,
+            },
+            TestCase {
+                name: "Clearing the Jeopardy board still starts Double Jeopardy before Final",
+                create_room: create_final_room,
+                initial_state: GameState::AnswerReveal,
+                setup: |room| {
+                    answer_round(room, 0);
+                    room.current_question = Some((0, 1));
+                },
+                command: GameCommand::HostContinue,
+                expected_state: GameState::Selection,
+                expected_round: 1,
+            },
+            TestCase {
+                name: "Clearing the board of a single-round game starts Final Jeopardy",
+                create_room: create_single_round_final_room,
+                initial_state: GameState::AnswerReveal,
+                setup: |room| {
+                    answer_round(room, 0);
+                    room.current_question = Some((0, 1));
+                },
+                command: GameCommand::HostContinue,
+                expected_state: GameState::FinalWager,
+                expected_round: 0,
+            },
+            TestCase {
+                name: "HostNextRound in the last round starts Final Jeopardy",
+                create_room: create_final_room,
+                initial_state: GameState::Selection,
+                setup: |room| room.round_index = 1,
+                command: GameCommand::HostNextRound { round: 1 },
+                expected_state: GameState::FinalWager,
+                expected_round: 1,
+            },
+            TestCase {
+                name: "HostNextRound in a single-round game starts Final Jeopardy",
+                create_room: create_single_round_final_room,
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostNextRound { round: 0 },
+                expected_state: GameState::FinalWager,
+                expected_round: 0,
+            },
+            TestCase {
+                name: "HostNextRound skips an answered Double Jeopardy to Final Jeopardy",
+                create_room: create_final_room,
+                initial_state: GameState::Selection,
+                setup: |room| answer_round(room, 1),
+                command: GameCommand::HostNextRound { round: 0 },
+                expected_state: GameState::FinalWager,
+                expected_round: 0,
+            },
+            TestCase {
+                name: "StartGame with no clues goes straight to Final Jeopardy",
+                create_room: create_final_room,
+                initial_state: GameState::Start,
+                setup: |room| {
+                    room.rounds[0].clear();
+                    room.rounds[1].clear();
+                },
+                command: GameCommand::StartGame,
+                expected_state: GameState::FinalWager,
+                expected_round: 0,
+            },
         ];
 
         for tc in test_cases {
@@ -2398,7 +3178,15 @@ mod tests {
             );
             if tc.expected_state == GameState::GameEnd {
                 assert_eq!(room.winner, Some(1), "{}: winner", tc.name);
+            } else {
+                assert_eq!(room.winner, None, "{}: winner before the end", tc.name);
             }
+            assert_eq!(
+                room.final_round.is_some(),
+                tc.expected_state == GameState::FinalWager,
+                "{}: Final Jeopardy started",
+                tc.name
+            );
             assert!(
                 response.messages_to_players.iter().any(|msg| matches!(
                     msg,
@@ -3281,5 +4069,883 @@ mod tests {
             assert_eq!(room.picker, Some(tc.expected_picker), "{}", tc.name);
             drop(receivers);
         }
+    }
+
+    fn final_question() -> FinalQuestion {
+        FinalQuestion {
+            category: "Wisconsin Rivers".to_string(),
+            question: "This river flows through Madison's lakes".to_string(),
+            answer: "What is the Yahara?".to_string(),
+        }
+    }
+
+    /// A two-round room that ends with Final Jeopardy
+    fn create_final_room() -> Room {
+        let mut room = create_two_round_room();
+        room.final_question = Some(final_question());
+        room
+    }
+
+    /// A single-round room that ends with Final Jeopardy
+    fn create_single_round_final_room() -> Room {
+        let mut room = create_test_room();
+        room.final_question = Some(final_question());
+        room
+    }
+
+    /// Final Jeopardy with only `pid` playing, whose response has been revealed but not
+    /// judged
+    fn revealed_final_round(pid: PlayerId) -> FinalRound {
+        FinalRound {
+            entries: BTreeMap::from([(
+                pid,
+                FinalEntry {
+                    wager: Some(100),
+                    answer: Some("Yahara".to_string()),
+                    correct: None,
+                    revealed: true,
+                },
+            )]),
+            reveal_order: vec![pid],
+            reveal_index: 0,
+        }
+    }
+
+    /// A room at the start of Final Jeopardy, reached by ending Double Jeopardy, with a
+    /// player for each score: pid 1, 2, ... in that order
+    fn final_room(scores: &[i32]) -> Room {
+        let mut room = create_final_room();
+        for (i, score) in scores.iter().enumerate() {
+            let pid = i as PlayerId + 1;
+            add_test_player(&mut room, pid, &format!("Player {pid}"));
+            room.players[i].player.score = *score;
+        }
+        room.round_index = 1;
+        room.state = GameState::Selection;
+        room.picker = Some(1);
+        room.handle_command(&GameCommand::HostNextRound { round: 1 }, Sender::Host);
+        assert_eq!(room.state, GameState::FinalWager);
+        room
+    }
+
+    fn final_answer(room: &mut Room, pid: PlayerId, answer: &str) -> RoomResponse {
+        room.handle_command(
+            &GameCommand::SubmitAnswer {
+                answer: answer.to_string(),
+            },
+            Sender::Player(pid),
+        )
+    }
+
+    fn reveal_and_judge(room: &mut Room, pid: PlayerId, correct: bool) {
+        room.handle_command(&GameCommand::HostRevealFinalResponse { pid }, Sender::Host);
+        room.handle_command(&GameCommand::HostChecked { correct }, Sender::Host);
+    }
+
+    fn final_entry(room: &Room, pid: PlayerId) -> FinalEntry {
+        room.final_round
+            .as_ref()
+            .and_then(|f| f.entries.get(&pid))
+            .cloned()
+            .unwrap_or_else(|| panic!("Player {pid} has no Final Jeopardy entry"))
+    }
+
+    fn score(room: &Room, pid: PlayerId) -> i32 {
+        room.score_of(pid)
+            .unwrap_or_else(|| panic!("Player {pid} isn't in the room"))
+    }
+
+    /// The Final Jeopardy fields of the PlayerState sent to `pid`, as
+    /// `(wager range, wager, prompt, can answer, answer, correct)`
+    type FinalPlayerView = (
+        Option<WagerRange>,
+        Option<u32>,
+        Option<String>,
+        bool,
+        Option<String>,
+        Option<bool>,
+    );
+
+    fn player_final_view(response: &RoomResponse, pid: PlayerId) -> Option<FinalPlayerView> {
+        response
+            .messages_to_specific
+            .iter()
+            .find_map(|(to, msg)| match msg {
+                GameEvent::PlayerState {
+                    wager_range,
+                    wager,
+                    prompt,
+                    can_answer,
+                    answer,
+                    correct,
+                    ..
+                } if *to == pid => Some((
+                    *wager_range,
+                    *wager,
+                    prompt.clone(),
+                    *can_answer,
+                    answer.clone(),
+                    *correct,
+                )),
+                _ => None,
+            })
+    }
+
+    /// The Final Jeopardy the host was last told about in `response`
+    fn host_final_view(response: &RoomResponse) -> Option<FinalView> {
+        response
+            .messages_to_host
+            .iter()
+            .rev()
+            .find_map(|msg| match msg {
+                GameEvent::GameState { final_jeopardy, .. } => Some(final_jeopardy.clone()),
+                _ => None,
+            })
+            .flatten()
+    }
+
+    #[test]
+    fn test_final_jeopardy_after_double_jeopardy() {
+        let mut room = create_final_room();
+        add_test_player(&mut room, 1, "AJ");
+        add_test_player(&mut room, 2, "Sam");
+
+        let response = room.handle_command(&GameCommand::StartGame, Sender::Host);
+        assert!(
+            response.messages_to_host.iter().any(|msg| matches!(
+                msg,
+                GameEvent::GameState {
+                    has_final: true,
+                    final_jeopardy: None,
+                    ..
+                }
+            )),
+            "The host knows a Final Jeopardy is coming, but not what it is"
+        );
+        room.handle_command(&GameCommand::HostSetPicker { pid: 1 }, Sender::Host);
+
+        // Jeopardy: AJ +200, Sam +400
+        play_clue(&mut room, 0, 0, 1, true);
+        play_clue(&mut room, 0, 1, 2, true);
+        assert_eq!(room.round_index, 1);
+        assert_eq!(room.state, GameState::Selection);
+
+        // Double Jeopardy: AJ +400, Sam -800, and AJ doesn't try it
+        play_clue(&mut room, 0, 0, 1, true);
+        room.handle_command(
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 1,
+            },
+            Sender::Host,
+        );
+        room.handle_command(&GameCommand::HostReady, Sender::Host);
+        buzz_and_judge(&mut room, 2, false);
+        room.handle_command(&GameCommand::HostSkip, Sender::Host);
+        let response = room.handle_command(&GameCommand::HostContinue, Sender::Host);
+        assert_eq!(room.state, GameState::FinalWager);
+        assert_eq!((score(&room, 1), score(&room, 2)), (600, -400));
+        assert_eq!(room.winner, None, "Nobody wins before Final Jeopardy");
+
+        let final_view = host_final_view(&response).expect("The host sees Final Jeopardy");
+        assert_eq!(final_view.category, "Wisconsin Rivers");
+        assert_eq!(final_view.answer, "What is the Yahara?");
+        assert_eq!(
+            final_view
+                .entries
+                .iter()
+                .map(|e| (e.pid, e.wager))
+                .collect::<Vec<_>>(),
+            vec![(1, None), (2, Some(1))],
+            "Sam has nothing to wager, so wagers $1"
+        );
+        assert_eq!(
+            player_final_view(&response, 1),
+            Some((
+                Some(WagerRange { min: 0, max: 600 }),
+                None,
+                Some("Wisconsin Rivers".to_string()),
+                false,
+                None,
+                None
+            )),
+            "AJ is asked to wager on the category"
+        );
+        assert_eq!(
+            player_final_view(&response, 2),
+            Some((
+                None,
+                Some(1),
+                Some("Wisconsin Rivers".to_string()),
+                false,
+                None,
+                None
+            )),
+            "Sam is told the $1 wager"
+        );
+
+        wager(&mut room, 1, 600);
+        let response = room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        assert_eq!(room.state, GameState::FinalAnswer);
+        assert_eq!(
+            player_final_view(&response, 1),
+            Some((
+                None,
+                Some(600),
+                Some("This river flows through Madison's lakes".to_string()),
+                true,
+                None,
+                None
+            )),
+            "AJ is shown the clue"
+        );
+
+        final_answer(&mut room, 1, "What is the Yahara?");
+        final_answer(&mut room, 2, "What is the Wisconsin?");
+        room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+        assert_eq!(room.state, GameState::FinalReveal);
+
+        // Sam, in last place, is revealed first
+        reveal_and_judge(&mut room, 2, false);
+        reveal_and_judge(&mut room, 1, true);
+        assert_eq!((score(&room, 1), score(&room, 2)), (1200, -401));
+        assert_eq!(room.state, GameState::FinalReveal);
+        assert_eq!(room.winner, None, "The host finishes the game");
+
+        let response = room.handle_command(&GameCommand::HostContinue, Sender::Host);
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(room.winner, Some(1));
+        let final_view = host_final_view(&response).expect("The host still sees the results");
+        assert_eq!(final_view.reveal_index, 2);
+        assert_eq!(
+            final_view
+                .entries
+                .iter()
+                .map(|e| (e.pid, e.correct))
+                .collect::<Vec<_>>(),
+            vec![(2, Some(false)), (1, Some(true))]
+        );
+    }
+
+    #[test]
+    fn test_final_jeopardy_after_a_single_round() {
+        let mut room = create_single_round_final_room();
+        add_test_player(&mut room, 1, "AJ");
+        room.handle_command(&GameCommand::StartGame, Sender::Host);
+        room.handle_command(&GameCommand::HostSetPicker { pid: 1 }, Sender::Host);
+
+        play_clue(&mut room, 0, 0, 1, true);
+        play_clue(&mut room, 0, 1, 1, true);
+        assert_eq!(room.state, GameState::FinalWager);
+        assert_eq!(room.round_index, 0);
+
+        wager(&mut room, 1, 0);
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+        reveal_and_judge(&mut room, 1, false);
+        room.handle_command(&GameCommand::HostContinue, Sender::Host);
+
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(score(&room, 1), 600, "A $0 wager changes nothing");
+        assert_eq!(room.winner, Some(1));
+    }
+
+    #[test]
+    fn test_final_wager_bounds() {
+        struct TestCase {
+            name: &'static str,
+            score: i32,
+            amount: u32,
+            accepted: bool,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Nothing",
+                score: 1000,
+                amount: 0,
+                accepted: true,
+            },
+            TestCase {
+                name: "Some",
+                score: 1000,
+                amount: 333,
+                accepted: true,
+            },
+            TestCase {
+                name: "All in",
+                score: 1000,
+                amount: 1000,
+                accepted: true,
+            },
+            TestCase {
+                name: "More than the score",
+                score: 1000,
+                amount: 1001,
+                accepted: false,
+            },
+            TestCase {
+                name: "All in with $1",
+                score: 1,
+                amount: 1,
+                accepted: true,
+            },
+            TestCase {
+                name: "$0 with a score of $0",
+                score: 0,
+                amount: 0,
+                accepted: false,
+            },
+            TestCase {
+                name: "$2 with a score of $0",
+                score: 0,
+                amount: 2,
+                accepted: false,
+            },
+            TestCase {
+                name: "$1 with a score of $0",
+                score: 0,
+                amount: 1,
+                accepted: true,
+            },
+            TestCase {
+                name: "$0 with a negative score",
+                score: -400,
+                amount: 0,
+                accepted: false,
+            },
+            TestCase {
+                name: "$2 with a negative score",
+                score: -400,
+                amount: 2,
+                accepted: false,
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = final_room(&[tc.score]);
+            let before = final_entry(&room, 1).wager;
+            assert_eq!(
+                before,
+                (tc.score <= 0).then_some(1),
+                "{}: starting wager",
+                tc.name
+            );
+
+            let response = wager(&mut room, 1, tc.amount);
+
+            assert_eq!(room.state, GameState::FinalWager, "{}: state", tc.name);
+            if tc.accepted {
+                assert_eq!(rejection(&response), None, "{}: rejected", tc.name);
+                assert_eq!(
+                    final_entry(&room, 1).wager,
+                    Some(tc.amount),
+                    "{}: wager",
+                    tc.name
+                );
+                let (_, wager, ..) = player_final_view(&response, 1)
+                    .unwrap_or_else(|| panic!("{}: player not told", tc.name));
+                assert_eq!(wager, Some(tc.amount), "{}: player's view", tc.name);
+                assert!(
+                    response
+                        .messages_to_host
+                        .iter()
+                        .any(|m| matches!(m, GameEvent::GameState { .. })),
+                    "{}: host not told",
+                    tc.name
+                );
+                assert!(
+                    response.messages_to_players.is_empty(),
+                    "{}: other players told",
+                    tc.name
+                );
+            } else {
+                let (to, reason) = rejection(&response)
+                    .unwrap_or_else(|| panic!("{}: wager should be rejected", tc.name));
+                assert_eq!(to, 1, "{}", tc.name);
+                let expected = if tc.score > 0 { "$0" } else { "$1" };
+                assert!(reason.contains(expected), "{}: reason {reason}", tc.name);
+                assert_eq!(final_entry(&room, 1).wager, before, "{}: wager", tc.name);
+                assert!(response.messages_to_host.is_empty(), "{}", tc.name);
+            }
+        }
+    }
+
+    #[test]
+    fn test_final_wager_can_be_changed_until_the_clue() {
+        let mut room = final_room(&[1000]);
+
+        let response = wager(&mut room, 1, 1000);
+        assert_eq!(
+            player_final_view(&response, 1).map(|(range, wager, ..)| (range, wager)),
+            Some((Some(WagerRange { min: 0, max: 1000 }), Some(1000))),
+            "The form stays open after a wager"
+        );
+        wager(&mut room, 1, 250);
+        assert_eq!(final_entry(&room, 1).wager, Some(250));
+
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        let response = wager(&mut room, 1, 900);
+        assert!(is_empty(&response), "Wagers close with the clue");
+        assert_eq!(final_entry(&room, 1).wager, Some(250));
+    }
+
+    #[test]
+    fn test_final_wrong_answer_with_nothing_loses_a_dollar() {
+        for start in [0, -300] {
+            let mut room = final_room(&[start]);
+            room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+            room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+            reveal_and_judge(&mut room, 1, false);
+            assert_eq!(score(&room, 1), start - 1, "starting score {start}");
+        }
+    }
+
+    #[test]
+    fn test_final_missing_wagers_and_answers() {
+        // A player with money who doesn't wager, and players with nothing who can't
+        let mut room = final_room(&[800, 0, -200]);
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        let wagers: Vec<_> = (1..=3).map(|pid| final_entry(&room, pid).wager).collect();
+        assert_eq!(wagers, vec![Some(0), Some(1), Some(1)]);
+
+        final_answer(&mut room, 2, "What is the Rock?");
+        room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+        let answers: Vec<_> = (1..=3).map(|pid| final_entry(&room, pid).answer).collect();
+        assert_eq!(
+            answers,
+            vec![
+                Some(String::new()),
+                Some("What is the Rock?".to_string()),
+                Some(String::new())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_final_answers() {
+        struct TestCase {
+            name: &'static str,
+            answers: Vec<String>,
+            expected: String,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Trimmed",
+                answers: vec!["  What is the Yahara?\n".to_string()],
+                expected: "What is the Yahara?".to_string(),
+            },
+            TestCase {
+                name: "Changed",
+                answers: vec!["Wisconsin".to_string(), "Yahara".to_string()],
+                expected: "Yahara".to_string(),
+            },
+            TestCase {
+                name: "Cleared",
+                answers: vec!["Wisconsin".to_string(), "   ".to_string()],
+                expected: String::new(),
+            },
+            TestCase {
+                name: "Cut off",
+                answers: vec!["y".repeat(FINAL_ANSWER_MAX_CHARS + 50)],
+                expected: "y".repeat(FINAL_ANSWER_MAX_CHARS),
+            },
+            TestCase {
+                name: "Cut off by characters, not bytes",
+                answers: vec!["é".repeat(FINAL_ANSWER_MAX_CHARS + 1)],
+                expected: "é".repeat(FINAL_ANSWER_MAX_CHARS),
+            },
+            TestCase {
+                name: "Cut off before a space",
+                answers: vec![format!("{} more", "y".repeat(FINAL_ANSWER_MAX_CHARS - 1))],
+                expected: "y".repeat(FINAL_ANSWER_MAX_CHARS - 1),
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = final_room(&[500, 500]);
+            room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+            let mut response = RoomResponse::new();
+            for answer in &tc.answers {
+                response = final_answer(&mut room, 1, answer);
+            }
+
+            assert_eq!(room.state, GameState::FinalAnswer, "{}", tc.name);
+            assert_eq!(
+                final_entry(&room, 1).answer,
+                Some(tc.expected.clone()),
+                "{}",
+                tc.name
+            );
+            assert_eq!(final_entry(&room, 2).answer, None, "{}", tc.name);
+            let (.., can_answer, answer, _) = player_final_view(&response, 1)
+                .unwrap_or_else(|| panic!("{}: player not told", tc.name));
+            assert!(can_answer, "{}: can still change it", tc.name);
+            assert_eq!(answer, Some(tc.expected), "{}: player's view", tc.name);
+            assert!(
+                player_final_view(&response, 2).is_none(),
+                "{}: other player told",
+                tc.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_final_answers_close_when_locked() {
+        let mut room = final_room(&[500]);
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        final_answer(&mut room, 1, "Yahara");
+        let response = room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+        assert_eq!(
+            player_final_view(&response, 1).map(|(.., can_answer, answer, _)| (can_answer, answer)),
+            Some((false, Some("Yahara".to_string())))
+        );
+
+        let response = final_answer(&mut room, 1, "Wisconsin");
+        assert!(is_empty(&response));
+        assert_eq!(final_entry(&room, 1).answer, Some("Yahara".to_string()));
+    }
+
+    #[test]
+    fn test_final_reveal_order() {
+        struct TestCase {
+            name: &'static str,
+            scores: Vec<i32>,
+            expected_order: Vec<PlayerId>,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Lowest score first",
+                scores: vec![1200, -100, 800, 0],
+                expected_order: vec![2, 4, 3, 1],
+            },
+            TestCase {
+                name: "Ties go to the lowest pid",
+                scores: vec![500, 300, 500, 300],
+                expected_order: vec![2, 4, 1, 3],
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = final_room(&tc.scores);
+            room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+            let response = room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+
+            let final_round = room.final_round.as_ref().expect("Final Jeopardy started");
+            assert_eq!(final_round.reveal_order, tc.expected_order, "{}", tc.name);
+            assert_eq!(final_round.reveal_index, 0, "{}", tc.name);
+            let host_order: Vec<PlayerId> = host_final_view(&response)
+                .expect("The host sees Final Jeopardy")
+                .entries
+                .iter()
+                .map(|e| e.pid)
+                .collect();
+            assert_eq!(host_order, tc.expected_order, "{}: host's order", tc.name);
+        }
+    }
+
+    #[test]
+    fn test_final_winner_is_decided_after_the_reveal() {
+        // The leader bets everything and misses, and the trailer bets everything and hits
+        let mut room = final_room(&[1000, 600]);
+        wager(&mut room, 1, 1000);
+        wager(&mut room, 2, 600);
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+        reveal_and_judge(&mut room, 2, true);
+        reveal_and_judge(&mut room, 1, false);
+        assert_eq!(room.winner, None);
+
+        room.handle_command(&GameCommand::HostContinue, Sender::Host);
+        assert_eq!((score(&room, 1), score(&room, 2)), (0, 1200));
+        assert_eq!(room.winner, Some(2));
+    }
+
+    #[test]
+    fn test_final_repeated_clicks_skip_nobody() {
+        let mut room = final_room(&[300, 200, 100]);
+        for pid in 1..=3 {
+            wager(&mut room, pid, 100);
+        }
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+        // Revealed in the order 3, 2, 1
+
+        // Judging before anything is revealed does nothing
+        let response =
+            room.handle_command(&GameCommand::HostChecked { correct: true }, Sender::Host);
+        assert!(is_empty(&response), "Judged an unrevealed response");
+
+        // Revealing anyone but the next player does nothing
+        for pid in [1, 2, 9] {
+            let response =
+                room.handle_command(&GameCommand::HostRevealFinalResponse { pid }, Sender::Host);
+            assert!(is_empty(&response), "Revealed {pid} out of turn");
+        }
+
+        // A double click on Reveal reveals once
+        room.handle_command(
+            &GameCommand::HostRevealFinalResponse { pid: 3 },
+            Sender::Host,
+        );
+        let response = room.handle_command(
+            &GameCommand::HostRevealFinalResponse { pid: 3 },
+            Sender::Host,
+        );
+        assert!(is_empty(&response), "Revealed twice");
+        assert!(final_entry(&room, 3).revealed);
+        assert!(!final_entry(&room, 2).revealed);
+
+        // A double click on Correct judges once
+        room.handle_command(&GameCommand::HostChecked { correct: true }, Sender::Host);
+        let response =
+            room.handle_command(&GameCommand::HostChecked { correct: true }, Sender::Host);
+        assert!(is_empty(&response), "Judged the next player too");
+        assert_eq!(final_entry(&room, 3).correct, Some(true));
+        assert_eq!(final_entry(&room, 2).correct, None);
+        assert_eq!((score(&room, 3), score(&room, 2)), (200, 200));
+
+        // A stale reveal of someone already judged does nothing
+        let response = room.handle_command(
+            &GameCommand::HostRevealFinalResponse { pid: 3 },
+            Sender::Host,
+        );
+        assert!(is_empty(&response), "Revealed a judged player again");
+
+        reveal_and_judge(&mut room, 2, false);
+        reveal_and_judge(&mut room, 1, true);
+        let final_round = room.final_round.as_ref().expect("Final Jeopardy started");
+        assert_eq!(final_round.reveal_index, 3);
+        assert!(final_round.entries.values().all(|e| e.correct.is_some()));
+        assert_eq!(
+            (score(&room, 1), score(&room, 2), score(&room, 3)),
+            (400, 100, 200)
+        );
+
+        // Nothing is left to reveal or judge
+        let response =
+            room.handle_command(&GameCommand::HostChecked { correct: false }, Sender::Host);
+        assert!(is_empty(&response));
+        assert_eq!(score(&room, 1), 400);
+    }
+
+    #[test]
+    fn test_final_host_continue_waits_for_every_judgement() {
+        let mut room = final_room(&[300, 200]);
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+
+        let response = room.handle_command(&GameCommand::HostContinue, Sender::Host);
+        assert!(is_empty(&response), "Nobody judged yet");
+
+        reveal_and_judge(&mut room, 2, true);
+        room.handle_command(
+            &GameCommand::HostRevealFinalResponse { pid: 1 },
+            Sender::Host,
+        );
+        let response = room.handle_command(&GameCommand::HostContinue, Sender::Host);
+        assert!(is_empty(&response), "Revealed but not judged");
+        assert_eq!(room.state, GameState::FinalReveal);
+        assert_eq!(room.winner, None);
+
+        room.handle_command(&GameCommand::HostChecked { correct: true }, Sender::Host);
+        room.handle_command(&GameCommand::HostContinue, Sender::Host);
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(room.winner, Some(1));
+    }
+
+    #[test]
+    fn test_final_with_nobody_playing() {
+        let mut room = final_room(&[]);
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+        room.handle_command(&GameCommand::HostContinue, Sender::Host);
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(room.winner, None);
+    }
+
+    /// Adds a player as joining the room does
+    fn join(room: &mut Room, pid: PlayerId, name: &str) {
+        let (tx, _rx) = channel(10);
+        room.add_player(PlayerEntry::new(
+            Player::new(pid, name.to_string(), 0, false, PlayerToken::generate()),
+            tx,
+        ));
+    }
+
+    #[test]
+    fn test_final_late_joiners() {
+        // Joining during the wager: plays for $1
+        let mut room = final_room(&[500]);
+        join(&mut room, 2, "Late");
+        assert_eq!(final_entry(&room, 2).wager, Some(1));
+        let response = wager(&mut room, 2, 0);
+        assert!(
+            rejection(&response).is_some(),
+            "A late joiner can't wager $0"
+        );
+        let player_state = room.build_player_state_msg(2).expect("Late is in the room");
+        assert!(matches!(
+            player_state,
+            GameEvent::PlayerState {
+                wager_range: None,
+                wager: Some(1),
+                ..
+            }
+        ));
+
+        // Joining during the clue: plays for $1 too, and can respond
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        join(&mut room, 3, "Later");
+        assert_eq!(final_entry(&room, 3).wager, Some(1));
+        let response = final_answer(&mut room, 3, "Yahara");
+        assert_eq!(rejection(&response), None);
+        assert_eq!(final_entry(&room, 3).answer, Some("Yahara".to_string()));
+
+        // Joining during the reveal: only watches
+        room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+        join(&mut room, 4, "Latest");
+        let final_round = room.final_round.as_ref().expect("Final Jeopardy started");
+        assert!(!final_round.entries.contains_key(&4));
+        assert_eq!(final_round.reveal_order, vec![2, 3, 1]);
+        let player_state = room
+            .build_player_state_msg(4)
+            .expect("Latest is in the room");
+        assert!(matches!(
+            player_state,
+            GameEvent::PlayerState {
+                wager: None,
+                prompt: None,
+                can_answer: false,
+                answer: None,
+                ..
+            }
+        ));
+
+        reveal_and_judge(&mut room, 2, false);
+        reveal_and_judge(&mut room, 3, true);
+        reveal_and_judge(&mut room, 1, true);
+        room.handle_command(&GameCommand::HostContinue, Sender::Host);
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(
+            (1..=4).map(|pid| score(&room, pid)).collect::<Vec<_>>(),
+            vec![500, -1, 1, 0]
+        );
+    }
+
+    #[test]
+    fn test_final_late_joiner_during_the_reveal_cannot_play() {
+        let mut room = final_room(&[500]);
+        room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+        room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host);
+        join(&mut room, 2, "Latest");
+        // The state check comes first, so this is ignored rather than rejected
+        let response = final_answer(&mut room, 2, "Yahara");
+        assert!(is_empty(&response));
+    }
+
+    #[test]
+    fn test_final_jeopardy_privacy() {
+        let mut room = final_room(&[3000, 2000, -500]);
+        let wagers = [(1, 2345), (2, 1789)];
+        let answers = [
+            (1, "Secret response from AJ"),
+            (2, "Secret response from Sam"),
+            (3, "Secret response from Lee"),
+        ];
+        let correct_response = final_question().answer;
+
+        // Each response, with whether the clue's correct response may be in it
+        let mut responses = vec![];
+        for (pid, amount) in wagers {
+            responses.push(wager(&mut room, pid, amount));
+        }
+        responses.push(room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host));
+        for (pid, answer) in answers {
+            responses.push(final_answer(&mut room, pid, answer));
+        }
+        responses.push(room.handle_command(&GameCommand::HostLockFinalAnswers, Sender::Host));
+        for (pid, correct) in [(3, false), (2, true), (1, false)] {
+            responses.push(
+                room.handle_command(&GameCommand::HostRevealFinalResponse { pid }, Sender::Host),
+            );
+            responses
+                .push(room.handle_command(&GameCommand::HostChecked { correct }, Sender::Host));
+        }
+        responses.push(room.handle_command(&GameCommand::HostContinue, Sender::Host));
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(room.winner, Some(2));
+
+        let secrets_of = |pid: PlayerId| {
+            let mut secrets: Vec<String> = answers
+                .iter()
+                .filter(|(p, _)| *p == pid)
+                .map(|(_, a)| a.to_string())
+                .collect();
+            secrets.extend(
+                wagers
+                    .iter()
+                    .filter(|(p, _)| *p == pid)
+                    .map(|(_, w)| w.to_string()),
+            );
+            secrets
+        };
+
+        let mut checked = 0;
+        for response in &responses {
+            for msg in response
+                .messages_to_players
+                .iter()
+                .chain(response.witness.iter())
+            {
+                let json = serde_json::to_string(msg).expect("Failed to serialize event");
+                assert!(
+                    !json.contains(&correct_response),
+                    "Sent to everyone: {json}"
+                );
+                for pid in 1..=3 {
+                    for secret in secrets_of(pid) {
+                        assert!(!json.contains(&secret), "Sent to everyone: {json}");
+                    }
+                }
+                checked += 1;
+            }
+            for (to, msg) in &response.messages_to_specific {
+                let json = serde_json::to_string(msg).expect("Failed to serialize event");
+                assert!(!json.contains(&correct_response), "Sent to {to}: {json}");
+                for pid in (1..=3).filter(|pid| pid != to) {
+                    for secret in secrets_of(pid) {
+                        assert!(
+                            !json.contains(&secret),
+                            "{pid}'s {secret} sent to {to}: {json}"
+                        );
+                    }
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+
+        // The host is told everything
+        let final_view = responses
+            .iter()
+            .rev()
+            .find_map(host_final_view)
+            .expect("The host sees Final Jeopardy");
+        assert_eq!(final_view.answer, correct_response);
+        assert_eq!(
+            final_view
+                .entries
+                .iter()
+                .map(|e| (e.pid, e.wager, e.revealed))
+                .collect::<Vec<_>>(),
+            vec![
+                (3, Some(1), true),
+                (2, Some(1789), true),
+                (1, Some(2345), true)
+            ]
+        );
     }
 }
