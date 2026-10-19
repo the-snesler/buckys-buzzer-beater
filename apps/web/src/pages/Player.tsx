@@ -8,6 +8,9 @@ import { formatMoney } from '../lib/money';
 // How long a player is locked out after pressing before the buzzer glows
 const LOCKOUT_MS = 250;
 
+// The longest Final Jeopardy response the server keeps
+const MAX_ANSWER_LENGTH = 200;
+
 export default function Player() {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
@@ -30,6 +33,15 @@ export default function Player() {
   const [wagerError, setWagerError] = useState<string | null>(null);
   // Why the server refused this player's last command, until the game moves on
   const [rejection, setRejection] = useState<string | null>(null);
+  // Final Jeopardy: whether this player may respond now, the response the server has, and
+  // how the host judged it
+  const [canAnswer, setCanAnswer] = useState(false);
+  const [answer, setAnswer] = useState<string | null>(null);
+  const [correct, setCorrect] = useState<boolean | null>(null);
+  // The response being typed, which is only sent when the player submits it
+  const [answerDraft, setAnswerDraft] = useState("");
+  // A response sent to the server that it hasn't answered yet
+  const [pendingAnswer, setPendingAnswer] = useState<string | null>(null);
   // Whether the clue being played is a Daily Double. Players are only told while the
   // picker wagers, so this carries it on through the answer.
   const [dailyDoubleInPlay, setDailyDoubleInPlay] = useState(false);
@@ -74,14 +86,25 @@ export default function Player() {
           setWagerRange(message.wagerRange);
           setWager(message.wager);
           setPrompt(message.prompt);
-          // The server's state is the truth about the wager, so stop waiting for an answer
-          // to one that was sent. Without this, a wager lost to a dropped connection would
-          // leave the form disabled for good.
+          setCanAnswer(message.canAnswer);
+          setAnswer(message.answer);
+          setCorrect(message.correct);
+          // The server's state is the truth about the wager and the response, so stop
+          // waiting for an answer to one that was sent. Without this, one lost to a dropped
+          // connection would leave the form disabled for good.
           setPendingWager(null);
+          setPendingAnswer(null);
           if (message.wagerRange === null) {
             // The wager was accepted, or the host moved on
             setWagerError(null);
             setWagerInput("");
+          } else if (message.wager !== null && wagerInput === "") {
+            // A Final Jeopardy wager made before reconnecting, which can still be changed
+            setWagerInput(String(message.wager));
+          }
+          if (message.answer !== null && answerDraft === "") {
+            // A response sent before reconnecting
+            setAnswerDraft(message.answer);
           }
           setHasBuzzed(message.buzzed);
           updateCanBuzz(message.canBuzz);
@@ -100,6 +123,13 @@ export default function Player() {
           }
           setPhase(message.state);
           setPicker(message.picker);
+          if (
+            message.state !== "finalWager" &&
+            message.state !== "finalAnswer" &&
+            message.state !== "finalReveal"
+          ) {
+            setAnswerDraft("");
+          }
           if (message.state === "dailyDoubleWager") {
             setDailyDoubleInPlay(true);
           } else if (message.state !== "answer" && message.state !== "answerReveal") {
@@ -182,6 +212,19 @@ export default function Player() {
     sendMessage({ type: "SubmitWager", amount });
   };
 
+  const submitAnswer = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = answerDraft.trim();
+    setRejection(null);
+    setPendingAnswer(trimmed);
+    sendMessage({ type: "SubmitAnswer", answer: trimmed });
+  };
+
+  const finalWager = phase === "finalWager";
+  // The wager the server has, and the one typed, are the same, so there's nothing to send
+  const wagerSubmitted = wager !== null && wagerInput !== "" && Number(wagerInput) === wager;
+  const answerSubmitted = answer !== null && answerDraft.trim() === answer;
+
   return (
     <div className="min-h-[100svh] bg-gray-900 p-4">
       <div className="max-w-md mx-auto">
@@ -253,11 +296,18 @@ export default function Player() {
         {wagerRange !== null ? (
           <form onSubmit={submitWager} className="bg-blue-900 rounded-lg p-6 space-y-4">
             <div className="text-center">
-              <p className="text-3xl font-black text-yellow-300">Daily Double!</p>
+              <p className="text-3xl font-black text-yellow-300">
+                {finalWager ? "Final Jeopardy!" : "Daily Double!"}
+              </p>
               {prompt && <p className="text-lg text-white mt-1">{prompt}</p>}
               <p className="text-gray-300 mt-2">
                 Wager between {formatMoney(wagerRange.min)} and {formatMoney(wagerRange.max)}
               </p>
+              {finalWager && wager !== null && (
+                <p className="text-green-300 font-semibold mt-2">
+                  Your wager: {formatMoney(wager)} ✓ (you can change it until the clue is revealed)
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <span className="text-3xl font-bold text-white">$</span>
@@ -300,16 +350,102 @@ export default function Player() {
             )}
             <button
               type="submit"
-              disabled={pendingWager !== null || wagerInput === ""}
+              disabled={pendingWager !== null || wagerInput === "" || wagerSubmitted}
               className="w-full py-4 rounded-lg bg-yellow-500 text-gray-900 text-xl font-black hover:bg-yellow-400 disabled:opacity-60"
             >
               {pendingWager !== null
                 ? `Submitting ${formatMoney(pendingWager)}...`
                 : wagerInput === ""
                 ? "Enter a wager"
+                : wagerSubmitted
+                ? `Wagered ${formatMoney(Number(wagerInput))} ✓`
                 : `Wager ${formatMoney(Number(wagerInput))}`}
             </button>
           </form>
+        ) : finalWager ? (
+          <div className="bg-blue-900 rounded-lg p-6 text-center">
+            <p className="text-3xl font-black text-yellow-300">Final Jeopardy!</p>
+            {prompt && <p className="text-lg text-white mt-1">{prompt}</p>}
+            <p className="text-white text-xl mt-4">
+              {wager !== null
+                ? `You're wagering ${formatMoney(wager)}. Good luck.`
+                : "Waiting for the clue..."}
+            </p>
+          </div>
+        ) : phase === "finalAnswer" && canAnswer ? (
+          <form onSubmit={submitAnswer} className="bg-blue-900 rounded-lg p-6 space-y-4">
+            <div className="text-center">
+              <p className="text-3xl font-black text-yellow-300">Final Jeopardy!</p>
+              {prompt && <p className="text-xl text-white mt-2">{prompt}</p>}
+              {wager !== null && (
+                <p className="text-gray-300 mt-2">Your wager: {formatMoney(wager)}</p>
+              )}
+            </div>
+            <textarea
+              value={answerDraft}
+              onChange={(e) => {
+                setAnswerDraft(e.target.value);
+                setRejection(null);
+              }}
+              maxLength={MAX_ANSWER_LENGTH}
+              rows={3}
+              placeholder="What is..."
+              aria-label="Your response"
+              className="w-full px-4 py-3 rounded-lg bg-white text-gray-900 text-xl"
+            />
+            {answerSubmitted && (
+              <p className="text-green-300 font-semibold text-center">
+                Submitted ✓ (you can edit until the host locks)
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={pendingAnswer !== null || answerSubmitted || answerDraft.trim() === ""}
+              className="w-full py-4 rounded-lg bg-yellow-500 text-gray-900 text-xl font-black hover:bg-yellow-400 disabled:opacity-60"
+            >
+              {pendingAnswer !== null
+                ? "Submitting..."
+                : answer !== null && !answerSubmitted
+                ? "Update response"
+                : "Submit response"}
+            </button>
+          </form>
+        ) : phase === "finalAnswer" || phase === "finalReveal" ? (
+          <div className="bg-blue-900 rounded-lg p-6 text-center">
+            <p className="text-3xl font-black text-yellow-300">Final Jeopardy!</p>
+            {wager === null ? (
+              <p className="text-gray-200 text-lg mt-4">
+                You joined too late to play this one. Watch the screen!
+              </p>
+            ) : (
+              <>
+                {prompt && <p className="text-lg text-gray-200 mt-2">{prompt}</p>}
+                <p className="text-gray-300 mt-4">Responses are locked. Your response:</p>
+                <p className="text-white text-2xl font-bold mt-1 break-words">
+                  {answer ? answer : "(no response)"}
+                </p>
+                <p className="text-gray-300 mt-2">Your wager: {formatMoney(wager)}</p>
+                {correct === null ? (
+                  <p className="text-gray-200 text-lg mt-4 animate-pulse">
+                    Waiting for the host to reveal it...
+                  </p>
+                ) : correct ? (
+                  <p className="text-green-300 text-2xl font-black mt-4">
+                    Correct! +{formatMoney(wager)}
+                  </p>
+                ) : (
+                  <p className="text-red-300 text-2xl font-black mt-4">
+                    Incorrect. -{formatMoney(wager)}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        ) : phase === "gameEnd" ? (
+          <div className="bg-gray-800 rounded-lg p-6 text-center">
+            <p className="text-3xl font-black text-yellow-300">Game over!</p>
+            <p className="text-white text-xl mt-4">Final score: {formatMoney(score)}</p>
+          </div>
         ) : wager !== null && phase === "answer" ? (
           <div className="bg-blue-900 rounded-lg p-6 text-center">
             <p className="text-3xl font-black text-yellow-300">Daily Double!</p>
