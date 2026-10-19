@@ -40,6 +40,13 @@ const ROUND_NAMES: Record<Tab, string> = {
   final: 'Final Jeopardy',
 };
 
+/** Tab labels that fit on a phone */
+const SHORT_ROUND_NAMES: Record<Tab, string> = {
+  single: 'Jeopardy',
+  double: 'Double',
+  final: 'Final',
+};
+
 function createEmptyCategory(round: Round, index: number): GameCategory {
   return {
     title: defaultCategoryTitle(index),
@@ -293,13 +300,14 @@ export default function GameBuilder() {
               role="tab"
               aria-selected={tab === t}
               onClick={() => setTab(t)}
-              className={`px-4 py-2 rounded-t font-semibold flex items-center gap-2 ${
+              className={`px-3 sm:px-4 py-2 rounded-t font-semibold whitespace-nowrap flex items-center gap-2 ${
                 tab === t
                   ? 'bg-gray-800 text-white border border-b-0 border-gray-700'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              {ROUND_NAMES[t]}
+              <span className="sm:hidden">{SHORT_ROUND_NAMES[t]}</span>
+              <span className="hidden sm:inline">{ROUND_NAMES[t]}</span>
               {tabStatus(t) && (
                 <span className="text-xs font-normal text-gray-500">({tabStatus(t)})</span>
               )}
@@ -458,14 +466,14 @@ function RoundEditor({
 
       <div className="space-y-6">
         {categories.map((category, catIndex) => (
-          <div key={catIndex} className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-            <div className="flex items-center gap-4 mb-4">
+          <div key={catIndex} className="bg-gray-800 rounded-lg p-4 sm:p-6 border border-gray-700">
+            <div className="flex items-center gap-2 sm:gap-4 mb-4">
               <input
                 type="text"
                 value={category.title}
                 onChange={(e) => updateCategoryTitle(catIndex, e.target.value)}
                 placeholder="Category Title"
-                className="flex-1 px-4 py-2 bg-gray-700 text-white rounded text-lg font-semibold"
+                className="flex-1 min-w-0 px-4 py-2 bg-gray-700 text-white rounded text-lg font-semibold"
               />
               <button
                 onClick={() => removeCategory(catIndex)}
@@ -478,12 +486,13 @@ function RoundEditor({
 
             <div className="space-y-3">
               {category.questions.map((clue, clueIndex) => (
+                // On phones the answer goes on a second line under the clue
                 <div
                   key={clueIndex}
-                  className="grid grid-cols-[80px_1fr_1fr_auto] gap-3 items-start"
+                  className="grid grid-cols-[64px_1fr_auto] sm:grid-cols-[80px_1fr_1fr_auto] gap-2 sm:gap-3 items-start"
                 >
                   <div
-                    className={`px-3 py-2 text-white rounded text-center font-bold ${
+                    className={`px-1 sm:px-3 py-2 text-sm sm:text-base text-white rounded text-center font-bold ${
                       clue.dailyDouble ? 'bg-blue-600' : 'bg-yellow-600'
                     }`}
                   >
@@ -494,25 +503,27 @@ function RoundEditor({
                     value={clue.question}
                     onChange={(e) => updateClue(catIndex, clueIndex, { question: e.target.value })}
                     placeholder="Enter clue..."
-                    className="px-3 py-2 bg-gray-700 text-white rounded"
+                    className="min-w-0 w-full px-3 py-2 bg-gray-700 text-white rounded"
                   />
                   <input
                     type="text"
                     value={clue.answer}
                     onChange={(e) => updateClue(catIndex, clueIndex, { answer: e.target.value })}
                     placeholder="Enter answer..."
-                    className="px-3 py-2 bg-gray-700 text-white rounded"
+                    className="min-w-0 w-full px-3 py-2 bg-gray-700 text-white rounded row-start-2 col-start-2 col-span-2 sm:row-start-1 sm:col-start-3 sm:col-span-1"
                   />
-                  <label className="flex items-center gap-2 py-2 text-sm text-gray-300 whitespace-nowrap cursor-pointer">
+                  <label className="row-start-1 col-start-3 sm:col-start-4 flex items-center gap-2 py-2 text-sm text-gray-300 whitespace-nowrap cursor-pointer">
                     <input
                       type="checkbox"
                       checked={clue.dailyDouble}
                       onChange={(e) =>
                         updateClue(catIndex, clueIndex, { dailyDouble: e.target.checked })
                       }
+                      aria-label="Daily Double"
                       className="w-4 h-4 accent-blue-600"
                     />
-                    Daily Double
+                    <span aria-hidden="true" className="sm:hidden" title="Daily Double">DD</span>
+                    <span aria-hidden="true" className="hidden sm:inline">Daily Double</span>
                   </label>
                 </div>
               ))}
@@ -539,7 +550,7 @@ function FinalEditor({
   onChange: (final: FinalClue) => void;
 }) {
   return (
-    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700 space-y-4">
+    <div className="bg-gray-800 rounded-lg p-4 sm:p-6 border border-gray-700 space-y-4">
       <label className="block">
         <span className="block text-sm text-gray-400 mb-1">Category</span>
         <input
