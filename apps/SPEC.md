@@ -43,7 +43,7 @@ Every message is a JSON object whose `type` field names the message, with its fi
 | `EndGame` | Host | any state but `gameEnd` | Ends the game and decides the winner |
 | `HostSetPicker {pid}` | Host | `selection` | Makes `pid` the picker. Ignored if `pid` isn't in the room. |
 | `HostChoice {categoryIndex, questionIndex}` | Host | `selection` | Chooses a clue on the current board. Ignored while there is no picker, or if the clue is missing or already played. |
-| `HostReady` | Host | `questionReading` | Opens buzzing. Witnessed (see below). |
+| `HostReady` | Host | `questionReading` | Opens buzzing. Also sends a Witness (see below). |
 | `Buzz {reactionMs}` | Player | `waitingForBuzz` | Buzzes in. `reactionMs` is the time between the buzzer enabling and the press, measured on the phone. Ignored from a player who already buzzed on this clue. |
 | `HostChecked {correct}` | Host | `answer`, `finalReveal` | Judges the response being answered, or in Final Jeopardy the response just revealed |
 | `HostSkip` | Host | `questionReading`, `waitingForBuzz`, `dailyDoubleWager`, and `answer` on a Daily Double | Skips the clue with no score change |
@@ -62,16 +62,18 @@ Every message is a JSON object whose `type` field names the message, with its fi
 | Event | Sent to | When |
 |---|---|---|
 | `PlayerList {players}` | Host | When the host connects and whenever a player joins. Each player is `{pid, name, score, buzzed}`. |
-| `NewPlayer {pid, token}` | The joining player | Once, when they first join. Tokens are never sent anywhere else. |
+| `NewPlayer {pid, token}` | The joining player | Once, when they first join, with their own token. No one is ever sent another player's token. |
 | `GameState {...}` | Host | After every change once the game has started, and when the host reconnects. See [GameState](#gamestate-host-only). |
 | `PublicState {state, round, picker}` | Every player | Once the game has started: after every change, and when a player joins or reconnects. `round` is zero-based; `picker` is a pid or null. |
 | `PlayerState {...}` | One player | After every change, and when they join or reconnect. See [PlayerState](#playerstate). |
 | `Rejected {reason}` | One player | When their wager or response was refused, with a reason to show them |
 | `PlayerBuzzed {pid, name}` | Host | When the buzz window closes and `pid` wins the buzz |
-| `Witness {msg}` | Every player | Wraps the PublicState sent on HostReady. It's delayed by 500 ms minus each player's latency, so every phone enables its buzzer at about the same moment. |
+| `Witness {msg}` | Every player | On HostReady, a copy of the PublicState wrapped in a Witness, delayed by 500 ms minus each player's measured latency. The web client currently ignores it. |
 | `DoHeartbeat {hbid, t_sent}` / `GotHeartbeat {hbid}` | One player | See [Latency](#latency) |
 
-A broadcast sends GameState to the host, PublicState to every player, then each player their own PlayerState, so a player's own state always arrives last. A Final Jeopardy wager or response only changes what its player and the host see, so it's sent only to them.
+A broadcast sends GameState to the host, PublicState to every player, then each player their own PlayerState, so a player's PlayerState arrives after the PublicState it goes with. The only later message is the delayed Witness after HostReady. A Final Jeopardy wager or response only changes what its player and the host see, so it's sent only to them.
+
+Buzzers are enabled by the PlayerState (`canBuzz: true`) that HostReady's broadcast sends straight away, not by the Witness. Buzzing is kept fair by `reactionMs`: the first Buzz opens a 250 ms window, and when it closes the lowest reaction time wins, with ties going to whichever buzz arrived first.
 
 ## PlayerState
 
@@ -127,7 +129,7 @@ The wager fields are only filled in when they concern this player:
     ],
     "revealIndex": 0             // index into entries of the next response to reveal or judge; entries.length once all are judged
   },
-  "winner": pid | null           // set at game end; null on a tie
+  "winner": pid | null           // set at game end; null on a tie or if the room has no players
 }
 ```
 
@@ -150,7 +152,9 @@ The game logic is a state machine on the server (`game/room.rs`) with the follow
 - `gameEnd` - Game is over (final state)
 
 **Transitions:**
-- start → selection (StartGame; the first round with clues left)
+- start → selection (StartGame; the first round with clues left, which is Double Jeopardy if the Jeopardy board is empty)
+- start → finalWager (StartGame, no round has clues, and the game has Final Jeopardy)
+- start → gameEnd (StartGame, no round has clues, and no Final Jeopardy)
 - selection → selection (HostSetPicker)
 - selection → questionReading (HostChoice on a normal clue)
 - selection → dailyDoubleWager (HostChoice on a Daily Double)
@@ -179,22 +183,22 @@ The game logic is a state machine on the server (`game/room.rs`) with the follow
 
 ### Picker
 - The picker is the player who chooses the next clue. It's shown on the host, the display, and the picker's phone.
-- When the game starts, there is no picker, and HostChoice is ignored until the host sends HostSetPicker. The host can change the picker at any time during `selection`.
+- When the game starts, there is no picker, and HostChoice is ignored until the host sends HostSetPicker. This holds even if StartGame skips an empty Jeopardy board and starts in Double Jeopardy. The host can change the picker at any time during `selection`.
 - A correct response makes the responder the picker. After an incorrect response, a skip, or nobody answering, the picker stays the same.
-- At the start of Double Jeopardy, the picker is the connected player with the lowest score (ties to the lowest pid), or the lowest scorer of all if nobody is connected.
+- When the game moves on to Double Jeopardy from Jeopardy, the picker is the connected player with the lowest score (ties to the lowest pid), or the lowest scorer of all if nobody is connected. The host can override it.
 - A picker who disconnects stays the picker until the host chooses someone else.
 - Final Jeopardy clears the picker.
 
 ### Wagers
 | | Who | Accepted range |
 |---|---|---|
-| Daily Double | The picker who chose it | $5 up to their score, or up to the most valuable clue on the board if that's more |
+| Daily Double | The picker who chose it | $5 up to their score, or up to the most valuable clue on the board if that's more, and never less than $5 |
 | Final Jeopardy, score > $0 | Every player in it | $0 up to their score |
 | Final Jeopardy, score ≤ $0 | Every player in it | Exactly $1 (the $1 rule) |
 
 - A wager outside its range, or a Daily Double wager from anyone but the picker, gets a Rejected with the reason.
 - Only the picker answers a Daily Double: nobody buzzes, and an incorrect response doesn't reopen buzzing. The host can skip it while the picker wagers or answers.
-- A player with nothing to wager in Final Jeopardy is entered at $1 automatically, gets no `wagerRange`, and any other amount is rejected.
+- A player with nothing to wager in Final Jeopardy is entered at $1 automatically, gets no `wagerRange`, and any other amount is rejected. Since their wager is already in, the host sees them as "✓ wagered" from the start.
 - Final Jeopardy wagers can be changed until the clue is revealed. Anyone who hasn't wagered by then wagers $0 (or $1 under the $1 rule).
 - Final Jeopardy responses are trimmed and cut off at 200 characters, and can be changed until the host locks them. Anyone who hasn't responded by then gets an empty response.
 
@@ -202,17 +206,17 @@ The game logic is a state machine on the server (`game/room.rs`) with the follow
 - Everyone in the room when it starts plays it. Players who join during `finalWager` or `finalAnswer` play too, for $1. Players who join after the responses are locked only watch.
 - Reveal order: when the responses are locked, the players are ordered by score, lowest first (as on TV), with ties going to the lowest pid, the player who joined first.
 - For each player in that order, the host sends HostRevealFinalResponse (everyone sees the response), then HostChecked (their score moves by their wager). A response must be revealed before it's judged, and a repeated reveal or judgement is ignored, so nobody can be skipped.
-- The winner is decided once every response is judged and the host sends HostContinue: the single highest score wins, and a tie has no winner.
+- The winner is decided once every response is judged and the host sends HostContinue: the single highest score wins. A tie, or a room with no players, has no winner.
 
 ## Privacy
-- **Players** never receive GameState. They get PublicState, which is the same for everyone, and a PlayerState holding only their own wager and response. They are never sent a clue's correct response, another player's wager or response, or anyone's token.
-- **The host** gets the full GameState, including every correct response and every Final Jeopardy wager and response, so they can read and judge. The host UI hides wager amounts until the host clicks "peek".
+- **Players** never receive GameState. They get PublicState, which is the same for everyone, and a PlayerState holding only their own wager and response. They are never sent a clue's correct response, another player's wager or response, or another player's token.
+- **The host** gets the full GameState, including every correct response and every Final Jeopardy wager and response, so they can read and judge. The host UI shows only who has wagered or responded, and hides the Final Jeopardy wagers and responses themselves until the host clicks "peek".
 - **The display** is a window the host opens on the projector. The host forwards it `displayGameState(gameState)` (`web/src/lib/finalJeopardy.ts`) rather than GameState itself, which removes the Final Jeopardy clue until it's revealed, the correct response until every response is judged, each response until it's revealed, and each wager until its response is judged. The display shows a board clue's correct response only in `answerReveal`.
 - **Daily Doubles** are hidden from everyone, host included, until a picker chooses one.
 
 ## Latency
 
-The server can ask a player to measure its latency, which it uses to time Witness messages:
+The server can ask a player to measure its latency, which it uses to delay Witness messages:
 - `DoHeartbeat {hbid, t_sent}` is sent to each player when something calls `GET /rooms/:code/cpr`.
 - The player replies `Heartbeat {hbid, tDohbRecv}` with the time it got the DoHeartbeat, and the server answers `GotHeartbeat {hbid}`.
 - The player then reports `LatencyOfHeartbeat {hbid, tLat}`, where `tLat` is the time from receiving the DoHeartbeat to receiving the GotHeartbeat. The server combines it with the DoHeartbeat's timestamps into a latency, and keeps an average of the last few.
@@ -232,7 +236,7 @@ The server can ask a player to measure its latency, which it uses to time Witnes
 
 - `answered` and `dailyDouble` default to false.
 - With `randomDailyDoubles`, the server hides 1 Daily Double in Jeopardy and 2 in Double Jeopardy, in each round whose board has none of its own. They never go in the top row, and each goes in a different category.
-- The response is `201 Created` with `{"room_code": "ABC123", "host_token": "<uuid>"}`.
+- The response is `201 Created` with `{"room_code": "KXQWMB", "host_token": "<uuid>"}`. Room codes are 6 letters from A–Z without I or O.
 
 The web app builds this from a game file (`web/src/lib/gameFile.ts`), which the lobby loads and the Game Builder writes:
 
@@ -245,6 +249,12 @@ The web app builds this from a game file (`web/src/lib/gameFile.ts`), which the 
   }
 }
 ```
+
+Validation (`parseGameFile`):
+- Every category needs a non-empty name and at least one clue. Every clue needs non-empty `clue` and `solution` text, and a `value` that is a whole number of dollars, $0 or more. `dailyDouble`, if present, must be `true` or `false`.
+- A broken Jeopardy round rejects the whole file.
+- A broken Double Jeopardy or Final Jeopardy is skipped with a warning, so files with incomplete optional rounds (common in scraped games) still load. A Final Jeopardy with a clue also needs a category and a solution.
+- The Game Builder is stricter: it won't use a game until every round it has is complete.
 
 # API Endpoints
 /api/v1
