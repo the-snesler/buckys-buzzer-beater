@@ -1,13 +1,13 @@
 # Stage 1: Build the web app
-FROM node:20-alpine AS web-builder
+FROM node:24-alpine AS web-builder
 
 WORKDIR /app
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@9.12.0 --activate
+RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
 
 # Copy web app files
-COPY apps/web/package.json apps/web/pnpm-lock.yaml ./
+COPY apps/web/package.json apps/web/pnpm-lock.yaml apps/web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY apps/web/ ./
