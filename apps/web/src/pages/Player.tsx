@@ -8,8 +8,12 @@ import { formatMoney } from '../lib/money';
 // How long a player is locked out after pressing before the buzzer glows
 const LOCKOUT_MS = 250;
 
-// The longest Final Jeopardy response the server keeps
+// The longest Final Jeopardy response the server keeps. Keep in step with
+// FINAL_ANSWER_MAX_CHARS in apps/server/src/lib/game/room.rs.
 const MAX_ANSWER_LENGTH = 200;
+
+// How long after the player stops typing their Final Jeopardy response is saved
+const ANSWER_AUTOSAVE_MS = 600;
 
 export default function Player() {
   const { code } = useParams<{ code: string }>();
@@ -42,6 +46,12 @@ export default function Player() {
   const [answerDraft, setAnswerDraft] = useState("");
   // A response sent to the server that it hasn't answered yet
   const [pendingAnswer, setPendingAnswer] = useState<string | null>(null);
+  // Whether the player has typed in the response box. After that the box is theirs: the
+  // server's copy never replaces what they typed, so it can't move the cursor or undo an
+  // edit that crossed an autosave.
+  const answerTouchedRef = useRef(false);
+  // The last response autosaved, so the same text is never autosaved twice
+  const lastAutosaveRef = useRef<string | null>(null);
   // Whether the clue being played is a Daily Double. Players are only told while the
   // picker wagers, so this carries it on through the answer.
   const [dailyDoubleInPlay, setDailyDoubleInPlay] = useState(false);
@@ -102,7 +112,7 @@ export default function Player() {
             // A Final Jeopardy wager made before reconnecting, which can still be changed
             setWagerInput(String(message.wager));
           }
-          if (message.answer !== null && answerDraft === "") {
+          if (message.answer !== null && !answerTouchedRef.current) {
             // A response sent before reconnecting
             setAnswerDraft(message.answer);
           }
@@ -115,6 +125,7 @@ export default function Player() {
           break;
         case "Rejected":
           setPendingWager(null);
+          setPendingAnswer(null);
           setRejection(message.reason);
           break;
         case "PublicState":
@@ -129,6 +140,8 @@ export default function Player() {
             message.state !== "finalReveal"
           ) {
             setAnswerDraft("");
+            answerTouchedRef.current = false;
+            lastAutosaveRef.current = null;
           }
           if (message.state === "dailyDoubleWager") {
             setDailyDoubleInPlay(true);
@@ -212,13 +225,34 @@ export default function Player() {
     sendMessage({ type: "SubmitWager", amount });
   };
 
-  const submitAnswer = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = answerDraft.trim();
+  const sendAnswer = (trimmed: string) => {
     setRejection(null);
     setPendingAnswer(trimmed);
     sendMessage({ type: "SubmitAnswer", answer: trimmed });
   };
+
+  const submitAnswer = (e: React.FormEvent) => {
+    e.preventDefault();
+    sendAnswer(answerDraft.trim());
+  };
+
+  // Save the response shortly after the player stops typing, so an edit they never
+  // submitted isn't lost when the host locks the responses
+  useEffect(() => {
+    if (phase !== "finalAnswer" || !canAnswer || !answerTouchedRef.current) return;
+    const trimmed = answerDraft.trim();
+    if (
+      trimmed === (pendingAnswer ?? answer ?? "") ||
+      trimmed === lastAutosaveRef.current
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      lastAutosaveRef.current = trimmed;
+      sendAnswer(trimmed);
+    }, ANSWER_AUTOSAVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [answerDraft, answer, pendingAnswer, phase, canAnswer]);
 
   const finalWager = phase === "finalWager";
   // The wager the server has, and the one typed, are the same, so there's nothing to send
@@ -384,6 +418,7 @@ export default function Player() {
             <textarea
               value={answerDraft}
               onChange={(e) => {
+                answerTouchedRef.current = true;
                 setAnswerDraft(e.target.value);
                 setRejection(null);
               }}
@@ -393,19 +428,23 @@ export default function Player() {
               aria-label="Your response"
               className="w-full px-4 py-3 rounded-lg bg-white text-gray-900 text-xl"
             />
-            {answerSubmitted && (
-              <p className="text-green-300 font-semibold text-center">
-                Submitted ✓ (you can edit until the host locks)
-              </p>
-            )}
+            <p className="text-sm text-center min-h-[1.25rem]" aria-live="polite">
+              {pendingAnswer !== null ? (
+                <span className="text-gray-300">Saving…</span>
+              ) : answerSubmitted ? (
+                <span className="text-green-300 font-semibold">
+                  Saved ✓ (you can edit until the host locks)
+                </span>
+              ) : null}
+            </p>
             <button
               type="submit"
               disabled={pendingAnswer !== null || answerSubmitted || answerDraft.trim() === ""}
               className="w-full py-4 rounded-lg bg-yellow-500 text-gray-900 text-xl font-black hover:bg-yellow-400 disabled:opacity-60"
             >
-              {pendingAnswer !== null
-                ? "Submitting..."
-                : answer !== null && !answerSubmitted
+              {answerSubmitted
+                ? "Response saved"
+                : answer !== null
                 ? "Update response"
                 : "Submit response"}
             </button>
@@ -445,6 +484,22 @@ export default function Player() {
           <div className="bg-gray-800 rounded-lg p-6 text-center">
             <p className="text-3xl font-black text-yellow-300">Game over!</p>
             <p className="text-white text-xl mt-4">Final score: {formatMoney(score)}</p>
+            {/* Set once the Final Jeopardy responses were locked */}
+            {wager !== null && (
+              <div className="mt-6 border-t border-gray-700 pt-4">
+                <p className="text-gray-300">Your Final Jeopardy response:</p>
+                <p className="text-white text-xl font-bold mt-1 break-words">
+                  {answer ? answer : "(no response)"}
+                </p>
+                <p className="text-gray-300 mt-2">
+                  {correct === null
+                    ? `Wager: ${formatMoney(wager)}`
+                    : correct
+                    ? `Correct! +${formatMoney(wager)}`
+                    : `Incorrect. -${formatMoney(wager)}`}
+                </p>
+              </div>
+            )}
           </div>
         ) : wager !== null && phase === "answer" ? (
           <div className="bg-blue-900 rounded-lg p-6 text-center">
