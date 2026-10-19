@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../hooks/useWebSocket';
 import type { GamePhase } from '../types/game';
 import type { WagerRange } from '../types/messages';
+import { formatMoney } from '../lib/money';
 
 // How long a player is locked out after pressing before the buzzer glows
 const LOCKOUT_MS = 250;
@@ -23,9 +24,15 @@ export default function Player() {
   const [wager, setWager] = useState<number | null>(null);
   const [prompt, setPrompt] = useState<string | null>(null);
   const [wagerInput, setWagerInput] = useState("");
-  // A wager sent to the server that it hasn't accepted or rejected yet
+  // A wager sent to the server that it hasn't answered yet
   const [pendingWager, setPendingWager] = useState<number | null>(null);
+  // Why this phone won't send the wager as typed
   const [wagerError, setWagerError] = useState<string | null>(null);
+  // Why the server refused this player's last command, until the game moves on
+  const [rejection, setRejection] = useState<string | null>(null);
+  // Whether the clue being played is a Daily Double. Players are only told while the
+  // picker wagers, so this carries it on through the answer.
+  const [dailyDoubleInPlay, setDailyDoubleInPlay] = useState(false);
   const enabledAtRef = useRef<number | null>(null);
   const lockedUntilRef = useRef(0);
   const lockoutTimerRef = useRef<number | undefined>(undefined);
@@ -67,9 +74,12 @@ export default function Player() {
           setWagerRange(message.wagerRange);
           setWager(message.wager);
           setPrompt(message.prompt);
+          // The server's state is the truth about the wager, so stop waiting for an answer
+          // to one that was sent. Without this, a wager lost to a dropped connection would
+          // leave the form disabled for good.
+          setPendingWager(null);
           if (message.wagerRange === null) {
             // The wager was accepted, or the host moved on
-            setPendingWager(null);
             setWagerError(null);
             setWagerInput("");
           }
@@ -82,11 +92,19 @@ export default function Player() {
           break;
         case "Rejected":
           setPendingWager(null);
-          setWagerError(message.reason);
+          setRejection(message.reason);
           break;
         case "PublicState":
+          if (message.state !== phase) {
+            setRejection(null);
+          }
           setPhase(message.state);
           setPicker(message.picker);
+          if (message.state === "dailyDoubleWager") {
+            setDailyDoubleInPlay(true);
+          } else if (message.state !== "answer" && message.state !== "answerReveal") {
+            setDailyDoubleInPlay(false);
+          }
           if (message.state !== "start") {
             setGameStarted(true);
           }
@@ -138,6 +156,12 @@ export default function Player() {
 
   const glowing = canBuzz && !hasBuzzed && !lockedOut;
 
+  const changeWagerInput = (value: string) => {
+    setWagerInput(value);
+    setWagerError(null);
+    setRejection(null);
+  };
+
   const submitWager = (e: React.FormEvent) => {
     e.preventDefault();
     if (!wagerRange) return;
@@ -147,10 +171,13 @@ export default function Player() {
       return;
     }
     if (amount < wagerRange.min || amount > wagerRange.max) {
-      setWagerError(`Your wager must be between $${wagerRange.min} and $${wagerRange.max}`);
+      setWagerError(
+        `Your wager must be between ${formatMoney(wagerRange.min)} and ${formatMoney(wagerRange.max)}`
+      );
       return;
     }
     setWagerError(null);
+    setRejection(null);
     setPendingWager(amount);
     sendMessage({ type: "SubmitWager", amount });
   };
@@ -186,7 +213,7 @@ export default function Player() {
                 : "text-green-400"
             }`}
           >
-            ${score}
+            {formatMoney(score)}
           </div>
         </div>
 
@@ -217,20 +244,9 @@ export default function Player() {
           </div>
         )}
 
-        {phase === "dailyDoubleWager" && wagerRange === null && (
-          <div className="bg-blue-900 rounded-lg p-4 mb-4 text-center">
-            <p className="text-2xl font-black text-yellow-300">Daily Double!</p>
-            <p className="text-gray-200">Waiting for the wager...</p>
-          </div>
-        )}
-
-        {wager !== null && phase === "answer" && (
-          <div className="bg-blue-900 rounded-lg p-4 mb-4 text-center">
-            <p className="text-2xl font-black text-yellow-300">Daily Double!</p>
-            {prompt && <p className="text-gray-200">{prompt}</p>}
-            <p className="text-white text-lg mt-1">
-              You wagered ${wager}. Give the host your answer!
-            </p>
+        {rejection && wagerRange === null && (
+          <div className="bg-red-900 rounded-lg p-4 mb-4 text-center" role="alert">
+            <p className="text-red-100 font-semibold">{rejection}</p>
           </div>
         )}
 
@@ -240,7 +256,7 @@ export default function Player() {
               <p className="text-3xl font-black text-yellow-300">Daily Double!</p>
               {prompt && <p className="text-lg text-white mt-1">{prompt}</p>}
               <p className="text-gray-300 mt-2">
-                Wager between ${wagerRange.min} and ${wagerRange.max}
+                Wager between {formatMoney(wagerRange.min)} and {formatMoney(wagerRange.max)}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -251,10 +267,7 @@ export default function Player() {
                 pattern="[0-9]*"
                 autoComplete="off"
                 value={wagerInput}
-                onChange={(e) => {
-                  setWagerInput(e.target.value.replace(/[^0-9]/g, ""));
-                  setWagerError(null);
-                }}
+                onChange={(e) => changeWagerInput(e.target.value.replace(/[^0-9]/g, ""))}
                 disabled={pendingWager !== null}
                 placeholder={String(wagerRange.min)}
                 aria-label="Wager"
@@ -264,24 +277,25 @@ export default function Player() {
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setWagerInput(String(wagerRange.min))}
+                onClick={() => changeWagerInput(String(wagerRange.min))}
                 disabled={pendingWager !== null}
                 className="flex-1 py-2 rounded-lg bg-gray-700 text-white font-semibold hover:bg-gray-600 disabled:opacity-60"
               >
-                ${wagerRange.min} min
+                {formatMoney(wagerRange.min)} min
               </button>
               <button
                 type="button"
-                onClick={() => setWagerInput(String(wagerRange.max))}
+                onClick={() => changeWagerInput(String(wagerRange.max))}
                 disabled={pendingWager !== null}
                 className="flex-1 py-2 rounded-lg bg-gray-700 text-white font-semibold hover:bg-gray-600 disabled:opacity-60"
               >
-                All in (${wagerRange.max})
+                {/* The cap can be the board's top clue rather than this player's score */}
+                {wagerRange.max > score ? "Max" : "All in"} ({formatMoney(wagerRange.max)})
               </button>
             </div>
-            {wagerError && (
+            {(wagerError ?? rejection) && (
               <p className="text-red-300 font-semibold text-center" role="alert">
-                {wagerError}
+                {wagerError ?? rejection}
               </p>
             )}
             <button
@@ -290,12 +304,30 @@ export default function Player() {
               className="w-full py-4 rounded-lg bg-yellow-500 text-gray-900 text-xl font-black hover:bg-yellow-400 disabled:opacity-60"
             >
               {pendingWager !== null
-                ? `Submitting $${pendingWager}...`
+                ? `Submitting ${formatMoney(pendingWager)}...`
                 : wagerInput === ""
                 ? "Enter a wager"
-                : `Wager $${wagerInput}`}
+                : `Wager ${formatMoney(Number(wagerInput))}`}
             </button>
           </form>
+        ) : wager !== null && phase === "answer" ? (
+          <div className="bg-blue-900 rounded-lg p-6 text-center">
+            <p className="text-3xl font-black text-yellow-300">Daily Double!</p>
+            {prompt && <p className="text-lg text-gray-200 mt-1">{prompt}</p>}
+            <p className="text-white text-xl mt-4">
+              You wagered {formatMoney(wager)}. Give the host your answer!
+            </p>
+          </div>
+        ) : dailyDoubleInPlay &&
+          (phase === "dailyDoubleWager" || phase === "answer") ? (
+          <div className="bg-blue-900 rounded-lg p-6 text-center">
+            <p className="text-3xl font-black text-yellow-300">Daily Double!</p>
+            <p className="text-gray-200 text-lg mt-2">
+              {phase === "dailyDoubleWager"
+                ? "The picker is making a wager..."
+                : "The picker is answering..."}
+            </p>
+          </div>
         ) : (
           <div className="bg-gray-800 rounded-lg p-6 flex flex-col items-center">
             {/* Buzz on press rather than release, and keep the button pressable before
