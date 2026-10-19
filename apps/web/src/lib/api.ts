@@ -1,16 +1,6 @@
+import type { Category } from "../types/game";
+
 const API_BASE = "/api/v1";
-
-export interface Question {
-  question: string;
-  answer: string;
-  value: number;
-  answered: boolean;
-}
-
-export interface Category {
-  title: string;
-  questions: Question[];
-}
 
 export interface CreateRoomResponse {
   roomCode: string;

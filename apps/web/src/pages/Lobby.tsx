@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
-import { createRoom, type Category } from '../lib/api';
+import { createRoom } from '../lib/api';
+import type { Category } from '../types/game';
 
 interface LocationState {
   categories?: Category[];

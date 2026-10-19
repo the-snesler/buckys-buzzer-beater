@@ -1,24 +1,7 @@
-import { Category } from "../lib/api";
+import type { GamePhase, GameState, Player, PlayerId } from "./game";
 
-export type PlayerId = number;
 export type PlayerToken = string;
 
-export interface Player {
-  pid: PlayerId;
-  name: string;
-  score: number;
-  buzzed: boolean;
-}
-
-export type GameState =
-  | "start"
-  | "selection"
-  | "questionReading"
-  | "answer"
-  | "answerReveal"
-  | "waitingForBuzz"
-  | "gameEnd";
-  
 /**
  * Events sent from the server to clients.
  */
@@ -29,19 +12,11 @@ export type GameEvent =
   | { type: "PlayerList"; players: Player[] }
   | { type: "NewPlayer"; pid: PlayerId; token: PlayerToken }
   // Sent to the host only, since it contains every clue's answer
-  | {
-      type: "GameState";
-      state: GameState;
-      categories: Category[];
-      players: Player[];
-      currentQuestion: [number, number] | null;
-      currentBuzzer: PlayerId | null;
-      winner: PlayerId | null;
-    }
+  | ({ type: "GameState" } & GameState)
   // Sent to players instead of GameState
   | {
       type: "PublicState";
-      state: GameState;
+      state: GamePhase;
       round: number;
       picker: PlayerId | null;
     }

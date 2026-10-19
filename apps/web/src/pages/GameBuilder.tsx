@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { Category } from '../lib/api';
+import type { Category } from '../types/game';
 
 const DEFAULT_VALUES = [200, 400, 600, 800, 1000];
 

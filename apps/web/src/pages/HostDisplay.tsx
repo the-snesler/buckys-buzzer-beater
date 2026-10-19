@@ -2,37 +2,12 @@ import { useParams } from "react-router-dom";
 import { useState, useEffect } from "react";
 import React from "react";
 import { QRCodeSVG } from "qrcode.react";
-
-interface Question {
-  question: string;
-  answer: string;
-  value: number;
-  answered: boolean;
-}
-
-interface Category {
-  title: string;
-  questions: Question[];
-}
-
-interface PlayerState {
-  pid: number;
-  name: string;
-  score: number;
-}
-
-interface GameState {
-  state: string;
-  categories: Category[];
-  players: PlayerState[];
-  currentQuestion: [number, number] | null;
-  currentBuzzer: number | null;
-}
+import type { GameState, Player } from "../types/game";
 
 interface DisplayMessage {
   gameState: GameState | null;
   buzzedPlayer: { pid: number; name: string } | null;
-  playerList: PlayerState[];
+  playerList: Player[];
 }
 
 export default function HostDisplay() {
@@ -42,7 +17,7 @@ export default function HostDisplay() {
     pid: number;
     name: string;
   } | null>(null);
-  const [playerList, setPlayerList] = useState<PlayerState[]>([]);
+  const [playerList, setPlayerList] = useState<Player[]>([]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent<DisplayMessage>) => {

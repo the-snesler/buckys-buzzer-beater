@@ -2,38 +2,13 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { useState, useRef, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
-
-interface Question {
-  question: string;
-  answer: string;
-  value: number;
-  answered: boolean;
-}
-
-interface Category {
-  title: string;
-  questions: Question[];
-}
-
-interface PlayerState {
-  pid: number;
-  name: string;
-  score: number;
-}
-
-interface GameState {
-  state: string;
-  categories: Category[];
-  players: PlayerState[];
-  currentQuestion: [number, number] | null;
-  currentBuzzer: number | null;
-}
+import type { GameState, Player } from "../types/game";
 
 export default function Host() {
   console.log("Host mounted", new Date().toISOString());
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
-  const [playerList, setPlayerList] = useState<PlayerState[]>([]);
+  const [playerList, setPlayerList] = useState<Player[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [buzzedPlayer, setBuzzedPlayer] = useState<{ pid: number; name: string } | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
@@ -104,6 +79,7 @@ export default function Host() {
             players: message.players,
             currentQuestion: message.currentQuestion,
             currentBuzzer: message.currentBuzzer,
+            winner: message.winner,
           });
           if (message.state !== "answer") {
             setBuzzedPlayer(null); // Clear buzzed player when state changes
