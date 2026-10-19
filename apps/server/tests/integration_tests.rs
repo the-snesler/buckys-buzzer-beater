@@ -858,6 +858,104 @@ mod gameplay_tests {
     }
 
     #[tokio::test]
+    async fn test_two_round_game() {
+        let (_server, port, state) = start_test_server().await;
+        let category = |title: &str, value: u32| {
+            serde_json::json!({
+                "title": title,
+                "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": value},
+                    {"question": "Question 2", "answer": "Answer 2", "value": value * 2},
+                ],
+            })
+        };
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [category("Single", 200)],
+                "doubleCategories": [category("Double", 400)],
+            }),
+        )
+        .await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.rounds.len(), 2, "Room should have two rounds");
+            room.host_token.clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+        let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws]).await;
+
+        // Clearing the Jeopardy board (+200, +400) starts Double Jeopardy
+        play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
+        play_question(&mut host_ws, &mut aj_ws, 0, 1, true).await;
+        {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert!(matches!(room.state, GameState::Selection));
+            assert_eq!(room.round_index, 1, "Double Jeopardy should start");
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 600);
+        }
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        let last_public = sam_msgs
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                GameEvent::PublicState { state, round, .. } => Some((state.clone(), *round)),
+                _ => None,
+            })
+            .expect("Sam should receive PublicState");
+        assert_eq!(
+            last_public,
+            (GameState::Selection, 1),
+            "Players should be told Double Jeopardy started"
+        );
+
+        // Clue indices now refer to the Double Jeopardy board (+800)
+        play_question(&mut host_ws, &mut aj_ws, 0, 1, true).await;
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 1400);
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 0);
+        }
+
+        // The host ends Double Jeopardy with a clue left, which ends the game
+        let host_msgs = send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostNextRound).await;
+        let game_state = host_msgs
+            .iter()
+            .find_map(|m| match m {
+                GameEvent::GameState {
+                    state,
+                    round,
+                    round_count,
+                    categories,
+                    winner,
+                    ..
+                } => Some((
+                    state.clone(),
+                    *round,
+                    *round_count,
+                    categories[0].title.clone(),
+                    *winner,
+                )),
+                _ => None,
+            })
+            .expect("Host should receive GameState");
+        assert_eq!(
+            game_state,
+            (GameState::GameEnd, 1, 2, "Double".to_string(), Some(aj_id))
+        );
+    }
+
+    #[tokio::test]
     async fn test_concurrent_buzzes() {
         let (_server, port, state) = start_test_server().await;
         let room_code = create_room_http(port).await;

@@ -128,12 +128,17 @@ pub async fn recv_texts(ws: &mut WsStream) -> Vec<String> {
 /// # Returns
 /// Room code of created room
 pub async fn create_room_http(port: u16) -> String {
+    create_room_http_with(port, serde_json::json!({})).await
+}
+
+/// Create a room via HTTP API, sending `body` as the create request
+pub async fn create_room_http_with(port: u16, body: serde_json::Value) -> String {
     let url = format!("http://127.0.0.1:{}/api/v1/rooms/create", port);
 
     let client = reqwest::Client::new();
     let response = client
         .post(&url)
-        .json(&serde_json::json!({}))
+        .json(&body)
         .send()
         .await
         .expect("Failed to create room");
