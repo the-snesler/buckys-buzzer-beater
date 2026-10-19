@@ -58,7 +58,7 @@ export default function Player() {
             setGameStarted(true);
           }
           break;
-        case "GameState":
+        case "PublicState":
           if (message.state !== "start") {
             setGameStarted(true);
           }

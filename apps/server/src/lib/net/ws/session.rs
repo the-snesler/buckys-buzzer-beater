@@ -86,20 +86,7 @@ async fn reconnect_player(
 
     p.sender = tx.clone();
 
-    // Always send player state on reconnect
-    let can_buzz = room.state == GameState::WaitingForBuzz && !p.player.buzzed;
-    let player_state = GameEvent::PlayerState {
-        pid: p.player.pid,
-        buzzed: p.player.buzzed,
-        score: p.player.score,
-        can_buzz,
-    };
-    let _ = tx.send(player_state).await;
-
-    // Also send game state if game has started
-    if room.state != GameState::Start {
-        let _ = tx.send(room.build_game_state_msg()).await;
-    }
+    send_player_view(room, pid, &tx).await;
     Ok(pid)
 }
 
@@ -117,43 +104,33 @@ async fn register_new_player(
         tx.clone(),
     );
     tracing::info!(
-        "Broadcasting new player {} to {} existing players and host",
+        "Notifying host of new player {} ({} existing players)",
         &player.player.pid,
         room.players.len()
     );
     room.players.push(player);
 
     tx.send(GameEvent::NewPlayer { pid: new_id, token }).await?;
-    let can_buzz = room.state == GameState::WaitingForBuzz;
-    let player_state = GameEvent::PlayerState {
-        pid: new_id,
-        buzzed: false,
-        score: 0,
-        can_buzz,
-    };
-    let _ = tx.send(player_state).await;
-
-    if room.state != GameState::Start {
-        let _ = tx.send(room.build_game_state_msg()).await;
-
-        let game_state = room.build_game_state_msg();
-        if let Some(host) = &room.host {
-            let _ = host.sender.send(game_state.clone()).await;
-        }
-        for player in &room.players {
-            if player.player.pid != new_id {
-                let _ = player.sender.send(game_state.clone()).await;
-            }
-        }
-    } else if let Some(host) = &room.host {
-        let _ = send_player_list_to_host(host, &room.players).await;
-    }
+    send_player_view(room, new_id, &tx).await;
 
     if let Some(host) = &room.host {
+        if room.state != GameState::Start {
+            let _ = host.sender.send(room.build_game_state_msg()).await;
+        }
         let _ = send_player_list_to_host(host, &room.players).await;
     }
 
     Ok(new_id)
+}
+
+/// Sends a player their own state and, once the game has started, the public state
+async fn send_player_view(room: &Room, pid: PlayerId, tx: &tokio_mpmc::Sender<GameEvent>) {
+    if let Some(player_state) = room.build_player_state_msg(pid) {
+        let _ = tx.send(player_state).await;
+    }
+    if room.state != GameState::Start {
+        let _ = tx.send(room.build_public_state_msg()).await;
+    }
 }
 
 /// Sends the current player list to the host

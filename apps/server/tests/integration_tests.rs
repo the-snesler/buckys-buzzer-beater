@@ -190,7 +190,7 @@ mod gameplay_tests {
         let player_update = recv_msgs(&mut player_ws).await;
 
         let buzz_state = player_update.iter().find(|m| {
-            if let GameEvent::GameState { state, .. } = m {
+            if let GameEvent::PublicState { state, .. } = m {
                 matches!(state, GameState::WaitingForBuzz)
             } else {
                 false
@@ -199,6 +199,12 @@ mod gameplay_tests {
         assert!(
             buzz_state.is_some(),
             "Player should get WaitingForBuzz state"
+        );
+        assert!(
+            !player_update
+                .iter()
+                .any(|m| matches!(m, GameEvent::GameState { .. })),
+            "Player should not get the full GameState"
         );
 
         send_cmd_and_recv_all(&mut player_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
@@ -292,7 +298,7 @@ mod gameplay_tests {
         let has_state = reconnect_msgs.iter().any(|m| {
             matches!(
                 m,
-                GameEvent::PlayerState { .. } | GameEvent::GameState { .. }
+                GameEvent::PlayerState { .. } | GameEvent::PublicState { .. }
             )
         });
         assert!(has_state, "Should receive state on reconnect");
@@ -475,13 +481,190 @@ mod gameplay_tests {
         let waiting_state = player_ready.iter().any(|m| {
             matches!(
                 m,
-                GameEvent::GameState {
+                GameEvent::PublicState {
                     state: GameState::WaitingForBuzz,
                     ..
                 }
             )
         });
         assert!(waiting_state, "Game should continue after host reconnects");
+    }
+
+    #[tokio::test]
+    async fn test_players_never_receive_game_state() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let mut aj_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
+        let mut aj_texts = recv_texts(&mut aj_ws).await;
+        let mut sam_ws = connect_ws_client(port, &room_code, "?playerName=Sam").await;
+        let mut sam_texts = recv_texts(&mut sam_ws).await;
+
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::StartGame).await;
+        send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 0,
+            },
+        )
+        .await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostReady).await;
+        // Let the delayed HostReady witness arrive
+        sleep(Duration::from_millis(600)).await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+
+        let witness = sam_texts
+            .iter()
+            .filter_map(|t| serde_json::from_str::<GameEvent>(t).ok())
+            .find_map(|m| match m {
+                GameEvent::Witness { msg } => Some(*msg),
+                _ => None,
+            })
+            .expect("Players should receive the HostReady witness");
+        assert!(matches!(
+            witness,
+            GameEvent::PublicState {
+                state: GameState::WaitingForBuzz,
+                ..
+            }
+        ));
+
+        // A late joiner and a reconnecting player both get the public state
+        let mut late_ws = connect_ws_client(port, &room_code, "?playerName=Late").await;
+        let mut late_texts = recv_texts(&mut late_ws).await;
+
+        let (aj_id, aj_token) = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            let aj = &room.players[0].player;
+            (aj.pid, aj.token.clone())
+        };
+        drop(aj_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut aj_ws = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", aj_token, aj_id),
+        )
+        .await;
+        let reconnect_texts = recv_texts(&mut aj_ws).await;
+        for texts in [&late_texts, &reconnect_texts] {
+            assert!(
+                texts
+                    .iter()
+                    .filter_map(|t| serde_json::from_str::<GameEvent>(t).ok())
+                    .any(|m| matches!(
+                        m,
+                        GameEvent::PublicState {
+                            state: GameState::WaitingForBuzz,
+                            ..
+                        }
+                    )),
+                "Should receive PublicState on join: {:?}",
+                texts
+            );
+        }
+        aj_texts.extend(reconnect_texts);
+
+        send_cmd_and_recv_all(&mut sam_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
+        wait_for_buzz_window().await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostChecked { correct: true }).await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostContinue).await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        late_texts.extend(recv_texts(&mut late_ws).await);
+
+        let (tokens, answers): (Vec<String>, Vec<String>) = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            (
+                room.players
+                    .iter()
+                    .map(|p| p.player.token.to_string())
+                    .collect(),
+                room.categories[0]
+                    .questions
+                    .iter()
+                    .map(|q| q.answer.clone())
+                    .collect(),
+            )
+        };
+
+        for (i, texts) in [&aj_texts, &sam_texts, &late_texts].iter().enumerate() {
+            assert!(
+                texts.iter().any(|t| t.contains(r#""type":"PublicState""#)),
+                "Player {} should receive PublicState",
+                i
+            );
+            for text in texts.iter() {
+                assert!(
+                    !text.contains(r#""type":"GameState""#),
+                    "Player {} received GameState: {}",
+                    i,
+                    text
+                );
+                for answer in &answers {
+                    assert!(!text.contains(answer), "Answer leaked: {}", text);
+                }
+                for (j, token) in tokens.iter().enumerate() {
+                    // Only NewPlayer may carry a token, and only the owner's
+                    let allowed = i == j && text.contains(r#""type":"NewPlayer""#);
+                    assert!(
+                        allowed || !text.contains(token),
+                        "Player {}'s token leaked to player {}: {}",
+                        j,
+                        i,
+                        text
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_player_cannot_send_host_commands() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let (mut player_ws, _player_id) = add_player(port, &room_code, "AJ").await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let player_msgs = send_cmd_and_recv_all(&mut player_ws, &GameCommand::StartGame).await;
+        let host_msgs = recv_msgs(&mut host_ws).await;
+        assert!(player_msgs.is_empty(), "Got {:?}", player_msgs);
+        assert!(host_msgs.is_empty(), "Got {:?}", host_msgs);
+
+        let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).expect("Could not find room");
+        assert!(matches!(room.state, GameState::Start));
     }
 
     #[tokio::test]

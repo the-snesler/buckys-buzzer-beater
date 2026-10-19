@@ -160,7 +160,18 @@ impl Room {
         }
     }
 
-    fn build_player_state_msg(&self, player_id: PlayerId) -> Option<GameEvent> {
+    /// The game state every player may see. Players never receive [`GameEvent::GameState`],
+    /// because it contains every clue's answer.
+    pub fn build_public_state_msg(&self) -> GameEvent {
+        GameEvent::PublicState {
+            state: self.state.clone(),
+            // Games have a single round, and nobody tracks whose pick it is yet
+            round: 0,
+            picker: None,
+        }
+    }
+
+    pub fn build_player_state_msg(&self, player_id: PlayerId) -> Option<GameEvent> {
         let player = self.players.iter().find(|p| p.player.pid == player_id)?;
         let can_buzz = self.state == GameState::WaitingForBuzz && !player.player.buzzed;
 
@@ -196,8 +207,7 @@ impl Room {
         let response = match cmd {
             GameCommand::StartGame => {
                 self.state = GameState::Selection;
-                RoomResponse::broadcast_state(self.build_game_state_msg())
-                    .merge(self.build_all_player_states())
+                self.broadcast_state()
             }
 
             GameCommand::HostChoice {
@@ -226,8 +236,7 @@ impl Room {
                     player.player.buzzed = false;
                 }
                 self.state = GameState::QuestionReading;
-                RoomResponse::broadcast_state(self.build_game_state_msg())
-                    .merge(self.build_all_player_states())
+                self.broadcast_state()
             }
 
             GameCommand::Buzz { reaction_ms } => {
@@ -262,8 +271,7 @@ impl Room {
             GameCommand::HostReady => {
                 self.buzz_window = None;
                 self.state = GameState::WaitingForBuzz;
-                RoomResponse::broadcast_state(self.build_game_state_msg())
-                    .merge(self.build_all_player_states())
+                self.broadcast_state()
             }
 
             GameCommand::HostChecked { correct } => self.handle_host_checked(*correct),
@@ -295,14 +303,13 @@ impl Room {
                 self.determine_winner();
                 tracing::info!(?self.winner, "Game ended");
                 self.state = GameState::GameEnd;
-                RoomResponse::broadcast_state(self.build_game_state_msg())
-                    .merge(self.build_all_player_states())
+                self.broadcast_state()
             }
         };
 
         if cmd.should_witness() {
             RoomResponse {
-                witness: Some(self.build_game_state_msg()),
+                witness: Some(self.build_public_state_msg()),
                 ..response
             }
         } else {
@@ -363,9 +370,7 @@ impl Room {
             name: player_entry.player.name.clone(),
         };
 
-        RoomResponse::to_host(buzzed_msg)
-            .merge(RoomResponse::broadcast_state(self.build_game_state_msg()))
-            .merge(self.build_all_player_states())
+        RoomResponse::to_host(buzzed_msg).merge(self.broadcast_state())
     }
 
     pub fn handle_host_skip(&mut self) -> RoomResponse {
@@ -389,8 +394,7 @@ impl Room {
 
         self.state = GameState::AnswerReveal;
 
-        RoomResponse::broadcast_state(self.build_game_state_msg())
-            .merge(self.build_all_player_states())
+        self.broadcast_state()
     }
 
     fn handle_host_continue(&mut self) -> RoomResponse {
@@ -417,7 +421,13 @@ impl Room {
             "Transitioning after answer reveal"
         );
 
-        RoomResponse::broadcast_state(self.build_game_state_msg())
+        self.broadcast_state()
+    }
+
+    /// Sends the full game state to the host, the public state to every player, and each
+    /// player their own state
+    fn broadcast_state(&self) -> RoomResponse {
+        RoomResponse::broadcast_state(self.build_game_state_msg(), self.build_public_state_msg())
             .merge(self.build_all_player_states())
     }
 
@@ -471,8 +481,7 @@ impl Room {
             self.state = GameState::AnswerReveal;
         }
 
-        RoomResponse::broadcast_state(self.build_game_state_msg())
-            .merge(self.build_all_player_states())
+        self.broadcast_state()
     }
 
     fn has_remaining_questions(&self) -> bool {
@@ -1409,6 +1418,98 @@ mod tests {
         assert!(
             response.witness.is_none(),
             "A repeated HostReady is ignored"
+        );
+    }
+
+    #[test]
+    fn test_players_only_receive_public_state() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "AJ");
+        add_test_player(&mut room, 2, "Sam");
+        for (i, question) in room.categories[0].questions.iter_mut().enumerate() {
+            question.answer = format!("Secret answer {i}");
+        }
+
+        let mut responses = vec![room.handle_command(&GameCommand::StartGame, Sender::Host)];
+        for question_index in 0..2 {
+            responses.push(room.handle_command(
+                &GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index,
+                },
+                Sender::Host,
+            ));
+            responses.push(room.handle_command(&GameCommand::HostReady, Sender::Host));
+            let opened = buzz(&mut room, 1, 200);
+            let window = opened
+                .buzz_window_opened
+                .expect("Buzz should open a window");
+            responses.push(opened);
+            responses.push(room.resolve_buzz_window(window));
+            responses.push(
+                room.handle_command(&GameCommand::HostChecked { correct: false }, Sender::Host),
+            );
+            let opened = buzz(&mut room, 2, 200);
+            let window = opened
+                .buzz_window_opened
+                .expect("Buzz should open a window");
+            responses.push(opened);
+            responses.push(room.resolve_buzz_window(window));
+            responses.push(
+                room.handle_command(&GameCommand::HostChecked { correct: true }, Sender::Host),
+            );
+            responses.push(room.handle_command(&GameCommand::HostContinue, Sender::Host));
+        }
+        assert_eq!(room.state, GameState::GameEnd);
+
+        let secrets: Vec<String> = room
+            .players
+            .iter()
+            .map(|p| p.player.token.to_string())
+            .chain(
+                room.categories[0]
+                    .questions
+                    .iter()
+                    .map(|q| q.answer.clone()),
+            )
+            .collect();
+
+        let mut public_states = 0;
+        for response in &responses {
+            let to_players = response
+                .messages_to_players
+                .iter()
+                .chain(response.messages_to_specific.iter().map(|(_, msg)| msg))
+                .chain(response.witness.iter());
+            for msg in to_players {
+                if matches!(msg, GameEvent::PublicState { .. }) {
+                    public_states += 1;
+                }
+                assert!(
+                    !matches!(msg, GameEvent::GameState { .. }),
+                    "Player received GameState"
+                );
+                let json = serde_json::to_string(msg).expect("Failed to serialize event");
+                for secret in &secrets {
+                    assert!(
+                        !json.contains(secret),
+                        "{secret} leaked to a player: {json}"
+                    );
+                }
+            }
+
+            for msg in &response.messages_to_host {
+                let json = serde_json::to_string(msg).expect("Failed to serialize event");
+                assert!(!json.contains("token"), "Token sent to the host: {json}");
+            }
+        }
+        assert!(public_states > 0, "Players should receive PublicState");
+        assert!(
+            responses.iter().any(|r| r
+                .messages_to_host
+                .iter()
+                .any(|m| matches!(m, GameEvent::GameState { .. }))),
+            "Host should still receive GameState"
         );
     }
 

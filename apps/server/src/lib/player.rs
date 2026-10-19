@@ -10,6 +10,9 @@ pub struct Player {
     pub name: String,
     pub score: i32,
     pub buzzed: bool,
+    /// Never sent to clients, since it lets anyone reconnect as this player. `NewPlayer`
+    /// delivers it to its owner. Deserializing (which only clients do) gives a fresh token.
+    #[serde(skip_serializing, default = "PlayerToken::generate")]
     pub token: PlayerToken,
 }
 

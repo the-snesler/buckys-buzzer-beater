@@ -88,6 +88,18 @@ pub async fn send_cmd_and_recv_all(ws: &mut WsStream, cmd: &GameCommand) -> Vec<
 /// # Returns
 /// Vec of all received messages
 pub async fn recv_msgs(ws: &mut WsStream) -> Vec<GameEvent> {
+    recv_texts(ws)
+        .await
+        .iter()
+        .map(|text| match serde_json::from_str::<GameEvent>(text) {
+            Ok(parsed) => parsed,
+            Err(e) => panic!("Failed to parse GameEvent: {}. Text: {}", e, text),
+        })
+        .collect()
+}
+
+/// Like [`recv_msgs`], but returns the raw JSON of each message
+pub async fn recv_texts(ws: &mut WsStream) -> Vec<String> {
     use tokio_tungstenite::tungstenite::Message;
 
     let mut received = Vec::new();
@@ -95,10 +107,7 @@ pub async fn recv_msgs(ws: &mut WsStream) -> Vec<GameEvent> {
 
     loop {
         match tokio::time::timeout(timeout, ws.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<GameEvent>(&text) {
-                Ok(parsed) => received.push(parsed),
-                Err(e) => panic!("Failed to parse GameEvent: {}. Text: {}", e, text),
-            },
+            Ok(Some(Ok(Message::Text(text)))) => received.push(text.to_string()),
             Ok(Some(Ok(_))) => {
                 // Ignore non-text messages
             }

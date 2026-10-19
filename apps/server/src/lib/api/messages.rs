@@ -165,6 +165,7 @@ pub enum GameEvent {
         pid: PlayerId,
         token: PlayerToken,
     },
+    /// Sent to the host only, since it contains every clue's answer
     GameState {
         state: GameState,
         categories: Vec<Category>,
@@ -175,6 +176,16 @@ pub enum GameEvent {
         current_buzzer: Option<PlayerId>,
         winner: Option<PlayerId>,
     },
+    /// The part of the game state every player may see. Players receive this instead of
+    /// [`GameEvent::GameState`], which is only sent to the host.
+    PublicState {
+        state: GameState,
+        /// Zero-based index of the current round
+        round: usize,
+        /// The player whose turn it is to choose the next clue, if known
+        picker: Option<PlayerId>,
+    },
+    /// Sent to one player only
     PlayerState {
         pid: PlayerId,
         buzzed: bool,
@@ -191,6 +202,7 @@ pub enum GameEvent {
 #[cfg(test)]
 mod test {
     use crate::{
+        Player,
         api::messages::{GameCommand, GameEvent, Sender},
         game::GameState,
         net::connection::PlayerToken,
@@ -367,6 +379,33 @@ mod test {
                 ],
             },
             TestCase {
+                name: "PublicState",
+                event: GameEvent::PublicState {
+                    state: GameState::WaitingForBuzz,
+                    round: 1,
+                    picker: Some(2),
+                },
+                expected_substrings: vec![
+                    r#""type":"PublicState""#,
+                    r#""state":"waitingForBuzz""#,
+                    r#""round":1"#,
+                    r#""picker":2"#,
+                ],
+            },
+            TestCase {
+                name: "PlayerList omits tokens",
+                event: GameEvent::PlayerList {
+                    players: vec![Player::new(
+                        1,
+                        "AJ".to_string(),
+                        0,
+                        false,
+                        PlayerToken::generate(),
+                    )],
+                },
+                expected_substrings: vec![r#""type":"PlayerList""#, r#""name":"AJ""#],
+            },
+            TestCase {
                 name: "PlayerBuzzed",
                 event: GameEvent::PlayerBuzzed {
                     pid: 2,
@@ -417,6 +456,60 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_game_event_round_trip() {
+        let events = vec![
+            GameEvent::PublicState {
+                state: GameState::Selection,
+                round: 0,
+                picker: None,
+            },
+            GameEvent::PublicState {
+                state: GameState::AnswerReveal,
+                round: 1,
+                picker: Some(3),
+            },
+            GameEvent::Witness {
+                msg: Box::new(GameEvent::PublicState {
+                    state: GameState::WaitingForBuzz,
+                    round: 0,
+                    picker: None,
+                }),
+            },
+            GameEvent::PlayerState {
+                pid: 1,
+                buzzed: false,
+                score: -200,
+                can_buzz: true,
+            },
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event)
+                .unwrap_or_else(|e| panic!("Failed to serialize {:?}: {}", event, e));
+            let parsed: GameEvent = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("Failed to deserialize {}: {}", json, e));
+            assert_eq!(format!("{:?}", parsed), format!("{:?}", event));
+        }
+    }
+
+    #[test]
+    fn test_player_token_not_serialized() {
+        let token = PlayerToken::generate();
+        let player = Player::new(1, "AJ".to_string(), 0, false, token.clone());
+
+        let json = serde_json::to_string(&player).expect("Failed to serialize player");
+        assert!(!json.contains("token"), "Token key in {}", json);
+        assert!(
+            !json.contains(&token.to_string()),
+            "Token value in {}",
+            json
+        );
+
+        let parsed: Player = serde_json::from_str(&json).expect("Failed to deserialize player");
+        assert_ne!(parsed.token, token);
     }
 
     #[test]

@@ -8,7 +8,6 @@ export interface Player {
   name: string;
   score: number;
   buzzed: boolean;
-  token: PlayerToken;
 }
 
 export type GameState =
@@ -29,6 +28,7 @@ export type GameEvent =
   | { type: "GotHeartbeat"; hbid: number }
   | { type: "PlayerList"; players: Player[] }
   | { type: "NewPlayer"; pid: PlayerId; token: PlayerToken }
+  // Sent to the host only, since it contains every clue's answer
   | {
       type: "GameState";
       state: GameState;
@@ -38,6 +38,14 @@ export type GameEvent =
       currentBuzzer: PlayerId | null;
       winner: PlayerId | null;
     }
+  // Sent to players instead of GameState
+  | {
+      type: "PublicState";
+      state: GameState;
+      round: number;
+      picker: PlayerId | null;
+    }
+  // Sent to one player only
   | {
       type: "PlayerState";
       pid: PlayerId;

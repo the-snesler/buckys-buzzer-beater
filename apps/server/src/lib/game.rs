@@ -49,10 +49,11 @@ impl RoomResponse {
         }
     }
 
-    pub fn broadcast_state(state_msg: GameEvent) -> Self {
+    /// Sends `host_state` to the host and `public_state` to every player
+    pub fn broadcast_state(host_state: GameEvent, public_state: GameEvent) -> Self {
         Self {
-            messages_to_host: vec![state_msg.clone()],
-            messages_to_players: vec![state_msg],
+            messages_to_host: vec![host_state],
+            messages_to_players: vec![public_state],
             messages_to_specific: vec![],
             buzz_window_opened: None,
             witness: None,
