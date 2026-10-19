@@ -50,7 +50,7 @@ export interface FinalEntry {
 
 /**
  * Final Jeopardy as the host sees it. The display gets a copy with everything that
- * hasn't been revealed yet removed, see displayGameState in Host.tsx.
+ * hasn't been revealed yet removed, see displayGameState in lib/finalJeopardy.ts.
  */
 export interface FinalState {
   category: string;
