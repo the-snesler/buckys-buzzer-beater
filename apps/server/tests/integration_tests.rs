@@ -68,7 +68,7 @@ mod smoke_tests {
 }
 
 mod gameplay_tests {
-    use madhacks2025::{game::GameState, net::connection::PlayerEntry};
+    use madhacks2025::{api::messages::WagerRange, game::GameState, net::connection::PlayerEntry};
 
     use super::*;
 
@@ -989,6 +989,273 @@ mod gameplay_tests {
             game_state,
             (GameState::GameEnd, 1, 2, "Double".to_string(), Some(aj_id))
         );
+    }
+
+    /// The last PublicState in `msgs`, as `(state, round, picker)`
+    fn last_public_state(msgs: &[GameEvent]) -> Option<(GameState, usize, Option<u32>)> {
+        msgs.iter().rev().find_map(|m| match m {
+            GameEvent::PublicState {
+                state,
+                round,
+                picker,
+            } => Some((state.clone(), *round, *picker)),
+            _ => None,
+        })
+    }
+
+    /// What the host is told: `(state, current buzzer, picker, Daily Double wager)`
+    type HostView = (GameState, Option<u32>, Option<u32>, Option<u32>);
+
+    /// The last GameState in `msgs`
+    fn last_game_state(msgs: &[GameEvent]) -> Option<HostView> {
+        msgs.iter().rev().find_map(|m| match m {
+            GameEvent::GameState {
+                state,
+                current_buzzer,
+                picker,
+                dd_wager,
+                ..
+            } => Some((state.clone(), *current_buzzer, *picker, *dd_wager)),
+            _ => None,
+        })
+    }
+
+    fn parse_all(texts: &[String]) -> Vec<GameEvent> {
+        texts
+            .iter()
+            .map(|t| serde_json::from_str(t).expect("Failed to parse GameEvent"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_picker_and_daily_double() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [{"title": "Single", "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": 200},
+                    {"question": "Question 2", "answer": "Answer 2", "value": 400, "dailyDouble": true},
+                    {"question": "Question 3", "answer": "Answer 3", "value": 600},
+                ]}],
+                "doubleCategories": [{"title": "Double", "questions": [
+                    {"question": "Question 4", "answer": "Answer 4", "value": 400},
+                    {"question": "Question 5", "answer": "Answer 5", "value": 800},
+                ]}],
+            }),
+        )
+        .await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert!(room.rounds[0][0].questions[1].daily_double);
+            room.host_token.clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let mut host_texts = recv_texts(&mut host_ws).await;
+        let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+        let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+        host_texts.extend(recv_texts(&mut host_ws).await);
+        let mut aj_texts = Vec::new();
+
+        // Nobody can choose a clue until the host says who picks first
+        send_cmd(&mut host_ws, &GameCommand::StartGame).await;
+        host_texts.extend(recv_texts(&mut host_ws).await);
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        assert_eq!(
+            last_public_state(&sam_msgs),
+            Some((GameState::Selection, 0, None))
+        );
+        send_cmd(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 0,
+            },
+        )
+        .await;
+        let ignored = recv_texts(&mut host_ws).await;
+        assert!(ignored.is_empty(), "HostChoice needs a picker: {ignored:?}");
+
+        let host_msgs =
+            send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostSetPicker { pid: aj_id }).await;
+        assert_eq!(
+            last_game_state(&host_msgs),
+            Some((GameState::Selection, None, Some(aj_id), None))
+        );
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        assert_eq!(
+            last_public_state(&sam_msgs),
+            Some((GameState::Selection, 0, Some(aj_id)))
+        );
+
+        // AJ chooses a clue, and Sam answers it correctly (+200), so Sam picks next
+        play_question(&mut host_ws, &mut sam_ws, 0, 0, true).await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        assert_eq!(
+            last_public_state(&parse_all(&aj_texts)),
+            Some((GameState::Selection, 0, Some(sam_id)))
+        );
+
+        // Sam finds the Daily Double
+        send_cmd(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 1,
+            },
+        )
+        .await;
+        let texts = recv_texts(&mut host_ws).await;
+        assert_eq!(
+            last_game_state(&parse_all(&texts)),
+            Some((GameState::DailyDoubleWager, None, Some(sam_id), None))
+        );
+        host_texts.extend(texts);
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        let sam_view = sam_msgs.iter().find_map(|m| match m {
+            GameEvent::PlayerState {
+                wager_range,
+                prompt,
+                ..
+            } => Some((*wager_range, prompt.clone())),
+            _ => None,
+        });
+        assert_eq!(
+            sam_view,
+            Some((
+                Some(WagerRange { min: 5, max: 600 }),
+                Some("Single".to_string())
+            )),
+            "Sam can wager up to the top clue, since that's more than Sam's score"
+        );
+
+        // Only Sam may wager, and only within the range
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 100 }).await;
+        let texts = recv_texts(&mut aj_ws).await;
+        assert!(
+            parse_all(&texts)
+                .iter()
+                .any(|m| matches!(m, GameEvent::Rejected { .. })),
+            "AJ's wager should be rejected: {texts:?}"
+        );
+        aj_texts.extend(texts);
+        let sam_msgs =
+            send_cmd_and_recv_all(&mut sam_ws, &GameCommand::SubmitWager { amount: 601 }).await;
+        assert!(
+            sam_msgs
+                .iter()
+                .any(|m| matches!(m, GameEvent::Rejected { .. })),
+            "Sam's wager above the range should be rejected: {sam_msgs:?}"
+        );
+
+        // A valid wager goes straight to Sam's answer, with nobody buzzing
+        send_cmd(&mut sam_ws, &GameCommand::SubmitWager { amount: 500 }).await;
+        let texts = recv_texts(&mut host_ws).await;
+        assert_eq!(
+            last_game_state(&parse_all(&texts)),
+            Some((GameState::Answer, Some(sam_id), Some(sam_id), Some(500)))
+        );
+        host_texts.extend(texts);
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        assert!(sam_msgs.iter().any(|m| matches!(
+            m,
+            GameEvent::PlayerState {
+                wager: Some(500),
+                ..
+            }
+        )));
+
+        // Sam wins the wager rather than the clue's value (+500 = 700)
+        send_cmd(&mut host_ws, &GameCommand::HostChecked { correct: true }).await;
+        send_cmd(&mut host_ws, &GameCommand::HostContinue).await;
+        host_texts.extend(recv_texts(&mut host_ws).await);
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        let _ = recv_msgs(&mut sam_ws).await;
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 700);
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 0);
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.dd_wager, None);
+        }
+
+        // Clearing the board (+600 = 1300) starts Double Jeopardy, where AJ, in last place,
+        // picks first
+        play_question(&mut host_ws, &mut sam_ws, 0, 2, true).await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        assert_eq!(
+            last_public_state(&parse_all(&aj_texts)),
+            Some((GameState::Selection, 1, Some(aj_id)))
+        );
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 1300);
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.picker, Some(aj_id));
+        }
+
+        // Nobody, host included, is told where the Daily Doubles are, and AJ never sees
+        // Sam's wager
+        for text in host_texts.iter().chain(aj_texts.iter()) {
+            assert!(!text.contains(r#""dailyDouble""#), "Flag sent: {text}");
+        }
+        for msg in parse_all(&aj_texts) {
+            if let GameEvent::PlayerState {
+                wager_range,
+                wager,
+                prompt,
+                ..
+            } = msg
+            {
+                assert_eq!((wager_range, wager, prompt), (None, None, None));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_random_daily_doubles() {
+        let (_server, port, state) = start_test_server().await;
+        let board = |value: u32| {
+            (0..3)
+                .map(|c| {
+                    serde_json::json!({
+                        "title": format!("Category {c}"),
+                        "questions": (1..=3)
+                            .map(|i| serde_json::json!({
+                                "question": "Q", "answer": "A", "value": value * i,
+                            }))
+                            .collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": board(200),
+                "doubleCategories": board(400),
+                "randomDailyDoubles": true,
+            }),
+        )
+        .await;
+
+        let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).expect("Could not find room");
+        let counts: Vec<usize> = room
+            .rounds
+            .iter()
+            .map(|round| {
+                round
+                    .iter()
+                    .flat_map(|c| &c.questions)
+                    .filter(|q| q.daily_double)
+                    .count()
+            })
+            .collect();
+        assert_eq!(counts, vec![1, 2]);
     }
 
     #[tokio::test]
