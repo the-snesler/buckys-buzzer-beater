@@ -27,6 +27,9 @@ pub struct RoomResponse {
     /// Set when a buzz opened a new buzz window, which must be resolved once
     /// [`room::BUZZ_WINDOW`] has elapsed
     pub buzz_window_opened: Option<room::BuzzWindowId>,
+    /// Set when every player should receive this event at the same moment, see
+    /// [`room::Room::broadcast_witness`]
+    pub witness: Option<GameEvent>,
 }
 
 impl Default for RoomResponse {
@@ -42,6 +45,7 @@ impl RoomResponse {
             messages_to_players: vec![],
             messages_to_specific: vec![],
             buzz_window_opened: None,
+            witness: None,
         }
     }
 
@@ -51,6 +55,7 @@ impl RoomResponse {
             messages_to_players: vec![state_msg],
             messages_to_specific: vec![],
             buzz_window_opened: None,
+            witness: None,
         }
     }
 
@@ -60,6 +65,7 @@ impl RoomResponse {
             messages_to_players: vec![],
             messages_to_specific: vec![],
             buzz_window_opened: None,
+            witness: None,
         }
     }
 
@@ -69,6 +75,7 @@ impl RoomResponse {
             messages_to_players: vec![],
             messages_to_specific: vec![(player_id, msg)],
             buzz_window_opened: None,
+            witness: None,
         }
     }
 
@@ -77,6 +84,7 @@ impl RoomResponse {
         self.messages_to_players.extend(other.messages_to_players);
         self.messages_to_specific.extend(other.messages_to_specific);
         self.buzz_window_opened = self.buzz_window_opened.or(other.buzz_window_opened);
+        self.witness = self.witness.or(other.witness);
         self
     }
 }

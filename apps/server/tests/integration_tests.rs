@@ -157,6 +157,7 @@ mod gameplay_tests {
     async fn test_game_flow_start_to_buzz() {
         let (_server, port, state) = start_test_server().await;
         let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
 
         let host_token = {
             let room_map = state.room_map.lock().await;
@@ -175,8 +176,15 @@ mod gameplay_tests {
 
         start_game(&mut host_ws, &mut [&mut player_ws]).await;
 
-        let start_msgs = send_cmd_and_recv_all(&mut host_ws, &GameCommand::StartGame {}).await;
-        println!("After StartGame, host got: {:?}", start_msgs);
+        send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 0,
+            },
+        )
+        .await;
+        let _ = recv_msgs(&mut player_ws).await;
 
         send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostReady {}).await;
         let player_update = recv_msgs(&mut player_ws).await;
@@ -392,6 +400,7 @@ mod gameplay_tests {
     async fn test_host_reconnect() {
         let (_server, port, state) = start_test_server().await;
         let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
 
         let host_token = {
             let room_map = state.room_map.lock().await;
@@ -512,17 +521,39 @@ mod gameplay_tests {
         }
 
         // Question 2: Sam buzzes and gets it incorrect (-200)
-        play_question(&mut host_ws, &mut sam_ws, 0, 1, false).await;
+        send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 1,
+            },
+        )
+        .await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostReady).await;
+        let _ = recv_msgs(&mut sam_ws).await;
+        send_cmd_and_recv_all(&mut sam_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
+        wait_for_buzz_window().await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostChecked { correct: false }).await;
+        let _ = recv_msgs(&mut sam_ws).await;
         let _ = recv_msgs(&mut aj_ws).await;
 
         {
             let room_map = state.room_map.lock().await;
             assert_eq!(get_player_score(&room_map, &room_code, aj_id), 100);
             assert_eq!(get_player_score(&room_map, &room_code, sam_id), -200);
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert!(
+                matches!(room.state, GameState::WaitingForBuzz),
+                "Buzzing should reopen for AJ"
+            );
         }
 
-        // Question 2 again: AJ buzzes and gets it correct (+200 = 300 total)
-        play_question(&mut host_ws, &mut aj_ws, 0, 1, true).await;
+        // Question 2 rebound: AJ buzzes and gets it correct (+200 = 300 total)
+        send_cmd_and_recv_all(&mut aj_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
+        wait_for_buzz_window().await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostChecked { correct: true }).await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostContinue).await;
+        let _ = recv_msgs(&mut aj_ws).await;
         let _ = recv_msgs(&mut sam_ws).await;
 
         // Question 3: AJ buzzes and gets it correct (+400 = 600 total)

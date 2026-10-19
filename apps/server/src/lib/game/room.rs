@@ -182,8 +182,18 @@ impl Room {
             );
             return RoomResponse::new();
         }
+        if !self.allowed_in_state(cmd) {
+            tracing::info!(
+                room_code = %self.code,
+                ?sender,
+                ?cmd,
+                state = ?self.state,
+                "Ignoring command not allowed in the current state"
+            );
+            return RoomResponse::new();
+        }
 
-        match cmd {
+        let response = match cmd {
             GameCommand::StartGame => {
                 self.state = GameState::Selection;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
@@ -194,6 +204,21 @@ impl Room {
                 category_index,
                 question_index,
             } => {
+                let unanswered = self
+                    .categories
+                    .get(*category_index)
+                    .and_then(|cat| cat.questions.get(*question_index))
+                    .is_some_and(|q| !q.answered);
+                if !unanswered {
+                    tracing::info!(
+                        room_code = %self.code,
+                        category_index,
+                        question_index,
+                        "Ignoring choice of a missing or answered question"
+                    );
+                    return RoomResponse::new();
+                }
+
                 self.current_question = Some((*category_index, *question_index));
                 self.current_buzzer = None;
                 self.buzz_window = None;
@@ -206,8 +231,7 @@ impl Room {
             }
 
             GameCommand::Buzz { reaction_ms } => {
-                if self.state == GameState::WaitingForBuzz
-                    && let Sender::Player(player_id) = sender
+                if let Sender::Player(player_id) = sender
                     && let Some(player_entry) =
                         self.players.iter().find(|p| p.player.pid == player_id)
                     && !player_entry.player.buzzed
@@ -274,6 +298,34 @@ impl Room {
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
             }
+        };
+
+        if cmd.should_witness() {
+            RoomResponse {
+                witness: Some(self.build_game_state_msg()),
+                ..response
+            }
+        } else {
+            response
+        }
+    }
+
+    /// Whether `cmd` can be handled in the current state. Anything else is ignored, so a
+    /// double-click or a stale command can't skip part of the game.
+    fn allowed_in_state(&self, cmd: &GameCommand) -> bool {
+        match cmd {
+            GameCommand::StartGame => self.state == GameState::Start,
+            GameCommand::EndGame => self.state != GameState::GameEnd,
+            GameCommand::HostChoice { .. } => self.state == GameState::Selection,
+            GameCommand::HostReady => self.state == GameState::QuestionReading,
+            GameCommand::Buzz { .. } => self.state == GameState::WaitingForBuzz,
+            GameCommand::HostChecked { .. } => self.state == GameState::Answer,
+            GameCommand::HostSkip => matches!(
+                self.state,
+                GameState::QuestionReading | GameState::WaitingForBuzz
+            ),
+            GameCommand::HostContinue => self.state == GameState::AnswerReveal,
+            GameCommand::Heartbeat { .. } | GameCommand::LatencyOfHeartbeat { .. } => true,
         }
     }
 
@@ -1175,6 +1227,189 @@ mod tests {
                 tc.name
             );
         }
+    }
+
+    #[test]
+    fn test_commands_in_wrong_state_are_ignored() {
+        struct TestCase {
+            name: &'static str,
+            initial_state: GameState,
+            setup: fn(&mut Room),
+            command: GameCommand,
+            sender: Sender,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "StartGame after the game started",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::StartGame,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostChoice while a question is being read",
+                initial_state: GameState::QuestionReading,
+                setup: |_| {},
+                command: GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index: 1,
+                },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostChoice of an answered question",
+                initial_state: GameState::Selection,
+                setup: |room| room.categories[0].questions[1].answered = true,
+                command: GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index: 1,
+                },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostChoice of a missing category",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostChoice {
+                    category_index: 5,
+                    question_index: 0,
+                },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostChoice of a missing question",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index: 5,
+                },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostReady from Selection",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostReady,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostReady while a player is answering",
+                initial_state: GameState::Answer,
+                setup: |_| {},
+                command: GameCommand::HostReady,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "Buzz while the question is being read",
+                initial_state: GameState::QuestionReading,
+                setup: |_| {},
+                command: GameCommand::Buzz { reaction_ms: 100 },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "HostChecked while waiting for a buzz",
+                initial_state: GameState::WaitingForBuzz,
+                setup: |_| {},
+                command: GameCommand::HostChecked { correct: true },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostChecked twice",
+                initial_state: GameState::AnswerReveal,
+                setup: |_| {},
+                command: GameCommand::HostChecked { correct: true },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostSkip while a player is answering",
+                initial_state: GameState::Answer,
+                setup: |_| {},
+                command: GameCommand::HostSkip,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostSkip during the answer reveal",
+                initial_state: GameState::AnswerReveal,
+                setup: |_| {},
+                command: GameCommand::HostSkip,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostContinue from Selection",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostContinue,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostContinue while waiting for a buzz",
+                initial_state: GameState::WaitingForBuzz,
+                setup: |_| {},
+                command: GameCommand::HostContinue,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "EndGame after the game ended",
+                initial_state: GameState::GameEnd,
+                setup: |_| {},
+                command: GameCommand::EndGame,
+                sender: Sender::Host,
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = create_test_room();
+            add_test_player(&mut room, 1, "AJ");
+            room.state = tc.initial_state.clone();
+            room.current_question = Some((0, 0));
+            room.current_buzzer = Some(1);
+            (tc.setup)(&mut room);
+
+            let response = room.handle_command(&tc.command, tc.sender);
+
+            assert_eq!(room.state, tc.initial_state, "{}: state changed", tc.name);
+            assert!(is_empty(&response), "{}: response not empty", tc.name);
+            assert!(response.witness.is_none(), "{}: witnessed", tc.name);
+            assert_eq!(
+                room.current_question,
+                Some((0, 0)),
+                "{}: current question changed",
+                tc.name
+            );
+            assert_eq!(room.current_buzzer, Some(1), "{}: buzzer changed", tc.name);
+            assert_eq!(
+                room.players[0].player.score, 0,
+                "{}: score changed",
+                tc.name
+            );
+            assert!(
+                room.buzz_window.is_none(),
+                "{}: buzz window opened",
+                tc.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_only_accepted_host_ready_is_witnessed() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "AJ");
+        room.state = GameState::QuestionReading;
+        room.current_question = Some((0, 0));
+
+        let response = room.handle_command(&GameCommand::HostReady, Sender::Player(1));
+        assert!(response.witness.is_none(), "Player's HostReady is ignored");
+
+        let response = room.handle_command(&GameCommand::HostReady, Sender::Host);
+        assert!(response.witness.is_some(), "Host's HostReady is witnessed");
+
+        let response = room.handle_command(&GameCommand::HostReady, Sender::Host);
+        assert!(
+            response.witness.is_none(),
+            "A repeated HostReady is ignored"
+        );
     }
 
     fn buzz(room: &mut Room, pid: PlayerId, reaction_ms: u32) -> RoomResponse {

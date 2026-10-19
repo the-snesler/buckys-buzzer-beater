@@ -95,10 +95,6 @@ pub async fn ws_socket_handler(
                     let _ = self_tx.send(GameEvent::GotHeartbeat { hbid: *hbid }).await;
                 }
 
-                if cmd.should_witness() && cmd.allowed_from(sender) {
-                    handle_witness(&state, &code, &cmd).await;
-                }
-
                 let response = {
                     let mut room_map = state.room_map.lock().await;
                     let room = room_map
@@ -169,21 +165,6 @@ async fn parse_message(
     }
 }
 
-/// Hanldes witness events for time-critical synchronization.
-async fn handle_witness(state: &Arc<AppState>, code: &str, cmd: &GameCommand) {
-    let room_map = state.room_map.lock().await;
-    if let Some(room) = room_map.get(code) {
-        let witness_event = match cmd {
-            GameCommand::HostReady => Some(room.build_game_state_msg()),
-            _ => None,
-        };
-
-        if let Some(event) = witness_event {
-            room.broadcast_witness(event).await;
-        }
-    }
-}
-
 /// Dispatches response messages to appropriate recipients.
 async fn dispatch_responses(state: &Arc<AppState>, code: &str, response: RoomResponse) {
     tracing::debug!(
@@ -195,6 +176,10 @@ async fn dispatch_responses(state: &Arc<AppState>, code: &str, response: RoomRes
 
     let room_map = state.room_map.lock().await;
     if let Some(room) = room_map.get(code) {
+        if let Some(event) = response.witness {
+            room.broadcast_witness(event).await;
+        }
+
         if let Some(host) = &room.host {
             tracing::debug!(
                 "Sending {} messages to host",
