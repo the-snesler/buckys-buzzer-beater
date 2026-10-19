@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../hooks/useWebSocket';
+import type { GamePhase } from '../types/game';
 
 // How long a player is locked out after pressing before the buzzer glows
 const LOCKOUT_MS = 250;
@@ -14,6 +15,9 @@ export default function Player() {
   const [gameStarted, setGameStarted] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
   const [lockedOut, setLockedOut] = useState(false);
+  const [myPid, setMyPid] = useState<number | null>(null);
+  const [phase, setPhase] = useState<GamePhase>("start");
+  const [picker, setPicker] = useState<number | null>(null);
   const enabledAtRef = useRef<number | null>(null);
   const lockedUntilRef = useRef(0);
   const lockoutTimerRef = useRef<number | undefined>(undefined);
@@ -51,6 +55,7 @@ export default function Player() {
           );
           break;
         case "PlayerState":
+          setMyPid(message.pid);
           setHasBuzzed(message.buzzed);
           updateCanBuzz(message.canBuzz);
           setScore(message.score);
@@ -59,6 +64,8 @@ export default function Player() {
           }
           break;
         case "PublicState":
+          setPhase(message.state);
+          setPicker(message.picker);
           if (message.state !== "start") {
             setGameStarted(true);
           }
@@ -162,6 +169,13 @@ export default function Player() {
             >
               {copySuccess ? "✓ Copied!" : "Copy Join Link"}
             </button>
+          </div>
+        )}
+
+        {phase === "selection" && myPid !== null && picker === myPid && (
+          <div className="bg-yellow-500 rounded-lg p-4 mb-4 text-center">
+            <p className="text-2xl font-black text-gray-900">Your pick!</p>
+            <p className="text-gray-900">Tell the host which clue you want.</p>
           </div>
         )}
 

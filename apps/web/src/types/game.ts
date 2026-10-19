@@ -43,5 +43,7 @@ export interface GameState {
   players: Player[];
   currentQuestion: [number, number] | null;
   currentBuzzer: PlayerId | null;
+  /** The player who chooses the next clue. Null until the host chooses who picks first. */
+  picker: PlayerId | null;
   winner: PlayerId | null;
 }

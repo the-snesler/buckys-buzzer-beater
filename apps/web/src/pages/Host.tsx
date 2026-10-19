@@ -13,6 +13,7 @@ export default function Host() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [buzzedPlayer, setBuzzedPlayer] = useState<{ pid: number; name: string } | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [choosingPicker, setChoosingPicker] = useState(false);
   const displayWindowRef = useRef<Window | null>(null);
   const hostToken = sessionStorage.getItem(`host_token_${code}`);
 
@@ -82,8 +83,12 @@ export default function Host() {
             players: message.players,
             currentQuestion: message.currentQuestion,
             currentBuzzer: message.currentBuzzer,
+            picker: message.picker,
             winner: message.winner,
           });
+          if (message.state !== "selection") {
+            setChoosingPicker(false);
+          }
           if (message.state !== "answer") {
             setBuzzedPlayer(null); // Clear buzzed player when state changes
           }
@@ -108,6 +113,16 @@ export default function Host() {
       sendMessage({ type: "HostNextRound", round: gameState.round });
     }
   };
+
+  const setPicker = (pid: number) => {
+    sendMessage({ type: "HostSetPicker", pid });
+    setChoosingPicker(false);
+  };
+
+  const pickerName =
+    gameState?.picker != null
+      ? gameState.players.find((p) => p.pid === gameState.picker)?.name ?? null
+      : null;
 
   if (!hostToken) {
     return (
@@ -172,7 +187,29 @@ export default function Host() {
             {gameState.state === "selection" && (
               <div className="bg-gray-800 rounded-lg p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-2xl font-semibold text-white">Select a Question</h2>
+                  {gameState.picker === null ? (
+                    <h2 className="text-2xl font-semibold text-white">Who picks first?</h2>
+                  ) : choosingPicker ? (
+                    <h2 className="text-2xl font-semibold text-white">
+                      Who picks next?
+                      <button
+                        onClick={() => setChoosingPicker(false)}
+                        className="ml-3 text-sm font-normal text-gray-400 underline hover:text-gray-200"
+                      >
+                        cancel
+                      </button>
+                    </h2>
+                  ) : (
+                    <h2 className="text-2xl font-semibold text-white">
+                      <span className="text-yellow-400">{pickerName ?? "Unknown player"}</span>'s pick
+                      <button
+                        onClick={() => setChoosingPicker(true)}
+                        className="ml-3 text-sm font-normal text-gray-400 underline hover:text-gray-200"
+                      >
+                        change
+                      </button>
+                    </h2>
+                  )}
                   <button
                     onClick={endRound}
                     className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500 text-sm font-semibold"
@@ -180,31 +217,53 @@ export default function Host() {
                     {gameState.round + 1 < gameState.roundCount ? "End Round" : "End Game"}
                   </button>
                 </div>
-                <div className="overflow-x-auto">
-                  <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)` }}>
-                    {gameState.categories.map((category, catIdx) => (
-                      <div key={catIdx} className="space-y-2">
-                        <h3 className="text-center text-yellow-400 font-bold text-sm uppercase truncate">
-                          {category.title}
-                        </h3>
-                        {category.questions.map((question, qIdx) => (
-                          <button
-                            key={qIdx}
-                            disabled={question.answered}
-                            onClick={() => sendMessage({ type: "HostChoice", categoryIndex: catIdx, questionIndex: qIdx })}
-                            className={`w-full py-4 rounded font-bold text-lg ${
-                              question.answered
-                                ? "bg-gray-700 text-gray-500 cursor-not-allowed"
-                                : "bg-red-600 text-white hover:bg-red-500"
-                            }`}
-                          >
-                            ${question.value}
-                          </button>
-                        ))}
-                      </div>
-                    ))}
+                {gameState.picker === null || choosingPicker ? (
+                  gameState.players.length === 0 ? (
+                    <p className="text-gray-400">Waiting for players to join...</p>
+                  ) : (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {gameState.players.map((player) => (
+                        <button
+                          key={player.pid}
+                          onClick={() => setPicker(player.pid)}
+                          className={`py-4 rounded font-bold text-lg text-white ${
+                            player.pid === gameState.picker
+                              ? "bg-yellow-600 hover:bg-yellow-500"
+                              : "bg-blue-600 hover:bg-blue-500"
+                          }`}
+                        >
+                          {player.name}
+                        </button>
+                      ))}
+                    </div>
+                  )
+                ) : (
+                  <div className="overflow-x-auto">
+                    <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)` }}>
+                      {gameState.categories.map((category, catIdx) => (
+                        <div key={catIdx} className="space-y-2">
+                          <h3 className="text-center text-yellow-400 font-bold text-sm uppercase truncate">
+                            {category.title}
+                          </h3>
+                          {category.questions.map((question, qIdx) => (
+                            <button
+                              key={qIdx}
+                              disabled={question.answered}
+                              onClick={() => sendMessage({ type: "HostChoice", categoryIndex: catIdx, questionIndex: qIdx })}
+                              className={`w-full py-4 rounded font-bold text-lg ${
+                                question.answered
+                                  ? "bg-gray-700 text-gray-500 cursor-not-allowed"
+                                  : "bg-red-600 text-white hover:bg-red-500"
+                              }`}
+                            >
+                              ${question.value}
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             )}
 
@@ -343,11 +402,19 @@ export default function Host() {
               <h2 className="text-xl font-semibold text-white mb-4">Scores</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {gameState.players.map((player) => (
-                  <div key={player.pid} className="bg-gray-700 rounded p-3 text-center">
+                  <div
+                    key={player.pid}
+                    className={`bg-gray-700 rounded p-3 text-center ${
+                      player.pid === gameState.picker ? "ring-2 ring-yellow-400" : ""
+                    }`}
+                  >
                     <p className="text-white font-semibold">{player.name}</p>
                     <p className={`text-2xl ${
                         player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-green-400"
                       }`}>${player.score}</p>
+                    {player.pid === gameState.picker && (
+                      <p className="text-yellow-400 text-xs font-bold uppercase mt-1">Picking</p>
+                    )}
                   </div>
                 ))}
               </div>

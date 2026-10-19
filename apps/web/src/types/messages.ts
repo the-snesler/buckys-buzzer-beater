@@ -44,5 +44,6 @@ export type GameCommand =
   | { type: "HostContinue" }
   // `round` is the round being ended, so a repeated click can't also end the next one
   | { type: "HostNextRound"; round: number }
+  | { type: "HostSetPicker"; pid: PlayerId }
   | { type: "Heartbeat"; hbid: number; tDohbRecv: number }
   | { type: "LatencyOfHeartbeat"; hbid: number; tLat: number };

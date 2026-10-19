@@ -313,29 +313,40 @@ export default function HostDisplay() {
         {gameState.state !== "gameEnd" && (
           <div className="fixed bottom-0 left-0 right-0 p-4">
             <div className="max-w-6xl mx-auto flex justify-center gap-8">
-              {gameState.players.map((player) => (
-                <div
-                  key={player.pid}
-                  className={`px-6 py-3 text-center rounded-lg transition-all duration-300 ${
-                    buzzedPlayer?.pid === player.pid
-                      ? "bg-white/95 text-red-900 border-4 border-red-700 rounded-lg scale-110"
-                      : "bg-stone-800 text-white border-4 border-stone-600 rounded-lg"
-                  }`}
-                >
-                  <p className="font-semibold text-lg">{player.name}</p>
-                  <p
-                    className={`text-2xl font-bold ${
-                      player.score < 0
-                        ? "text-red-500"
-                        : player.score === 0
-                        ? "text-gray-500"
-                        : ""
+              {gameState.players.map((player) => {
+                const picking =
+                  gameState.state === "selection" && gameState.picker === player.pid;
+                return (
+                  <div
+                    key={player.pid}
+                    className={`relative px-6 py-3 text-center rounded-lg transition-all duration-300 ${
+                      buzzedPlayer?.pid === player.pid
+                        ? "bg-white/95 text-red-900 border-4 border-red-700 rounded-lg scale-110"
+                        : picking
+                        ? "bg-stone-800 text-white border-4 border-yellow-400 rounded-lg scale-110"
+                        : "bg-stone-800 text-white border-4 border-stone-600 rounded-lg"
                     }`}
                   >
-                    ${player.score}
-                  </p>
-                </div>
-              ))}
+                    {picking && (
+                      <span className="absolute -top-4 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded bg-yellow-400 text-stone-900 text-xs font-black tracking-widest">
+                        PICKING
+                      </span>
+                    )}
+                    <p className="font-semibold text-lg">{player.name}</p>
+                    <p
+                      className={`text-2xl font-bold ${
+                        player.score < 0
+                          ? "text-red-500"
+                          : player.score === 0
+                          ? "text-gray-500"
+                          : ""
+                      }`}
+                    >
+                      ${player.score}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
