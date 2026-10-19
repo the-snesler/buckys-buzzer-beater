@@ -227,13 +227,8 @@ mod test {
 
         for tc in test_cases {
             let result: Result<GameCommand, _> = serde_json::from_str(tc.json);
-            assert!(
-                result.is_ok(),
-                "Failed to deserialize {}: {:?}",
-                tc.name,
-                result.err()
-            );
-            let cmd = result.unwrap();
+            let cmd =
+                result.unwrap_or_else(|e| panic!("Failed to deserialize {}: {:?}", tc.name, e));
             assert_eq!(
                 format!("{:?}", cmd),
                 format!("{:?}", tc.expected),

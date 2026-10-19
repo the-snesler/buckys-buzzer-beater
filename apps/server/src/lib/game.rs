@@ -2,9 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{api::messages::GameEvent, player::PlayerId};
 
-pub mod models;
 pub mod room;
-pub mod state;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Question {

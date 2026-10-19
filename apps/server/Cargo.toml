@@ -32,6 +32,6 @@ uuid = { version = "1.19.0", features = ["v4", "serde"] }
 reqwest = { version = "0.12.24", features = ["json"] }
 
 [lints.clippy]
-unwrap-used = "deny"
+unwrap_used = "deny"
 todo = "deny"
 unimplemented = "deny"

@@ -142,8 +142,10 @@ mod test {
         };
 
         let result = perform_handshake(&room, &query);
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), AuthenticatedUser::Host));
+        assert!(matches!(
+            result.expect("handshake should succeed"),
+            AuthenticatedUser::Host
+        ));
     }
 
     #[test]
@@ -164,8 +166,7 @@ mod test {
         };
 
         let result = perform_handshake(&room, &query);
-        assert!(result.is_ok());
-        match result.unwrap() {
+        match result.expect("handshake should succeed") {
             AuthenticatedUser::ExistingPlayer { pid } => {
                 assert_eq!(pid, 1);
             }
@@ -184,8 +185,7 @@ mod test {
         };
 
         let result = perform_handshake(&room, &query);
-        assert!(result.is_ok());
-        match result.unwrap() {
+        match result.expect("handshake should succeed") {
             AuthenticatedUser::NewPlayer { name } => {
                 assert_eq!(name, "Bob");
             }
