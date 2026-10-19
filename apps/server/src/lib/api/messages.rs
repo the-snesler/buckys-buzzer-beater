@@ -61,6 +61,10 @@ pub enum GameCommand {
         /// repeated click can't skip the next round too.
         round: usize,
     },
+    /// Makes `pid` the player who chooses the next clue
+    HostSetPicker {
+        pid: PlayerId,
+    },
     Heartbeat {
         hbid: u32,
         #[serde(rename = "tDohbRecv")]
@@ -113,7 +117,8 @@ impl GameCommand {
             | Self::HostChecked { .. }
             | Self::HostSkip
             | Self::HostContinue
-            | Self::HostNextRound { .. } => true,
+            | Self::HostNextRound { .. }
+            | Self::HostSetPicker { .. } => true,
             Self::Buzz { .. } | Self::Heartbeat { .. } | Self::LatencyOfHeartbeat { .. } => false,
         }
     }
@@ -130,6 +135,7 @@ impl GameCommand {
             Self::HostSkip => "HostSkip",
             Self::HostContinue => "HostContinue",
             Self::HostNextRound { .. } => "HostNextRound",
+            Self::HostSetPicker { .. } => "HostSetPicker",
             Self::Heartbeat { .. } => "Heartbeat",
             Self::LatencyOfHeartbeat { .. } => "LatencyOfHeartbeat",
         }
@@ -203,6 +209,8 @@ pub enum GameEvent {
         current_question: Option<(usize, usize)>,
         #[serde(rename = "currentBuzzer")]
         current_buzzer: Option<PlayerId>,
+        /// The player whose turn it is to choose the next clue, if the host has chosen one
+        picker: Option<PlayerId>,
         winner: Option<PlayerId>,
     },
     /// The part of the game state every player may see. Players receive this instead of
@@ -282,6 +290,11 @@ mod test {
                 expected: GameCommand::HostNextRound { round: 1 },
             },
             TestCase {
+                name: "HostSetPicker",
+                json: r#"{"type": "HostSetPicker", "pid": 2}"#,
+                expected: GameCommand::HostSetPicker { pid: 2 },
+            },
+            TestCase {
                 name: "HostChoice",
                 json: r#"{"type": "HostChoice", "categoryIndex": 2, "questionIndex": 3}"#,
                 expected: GameCommand::HostChoice {
@@ -351,6 +364,10 @@ mod test {
                 json: r#"{"type": "HostNextRound"}"#,
             },
             TestCase {
+                name: "HostSetPicker without a pid",
+                json: r#"{"type": "HostSetPicker"}"#,
+            },
+            TestCase {
                 name: "Empty JSON",
                 json: r#"{}"#,
             },
@@ -398,6 +415,7 @@ mod test {
                     players: vec![],
                     current_question: None,
                     current_buzzer: None,
+                    picker: Some(3),
                     winner: None,
                 },
                 expected_substrings: vec![
@@ -406,6 +424,7 @@ mod test {
                     r#""categories""#,
                     r#""round":1"#,
                     r#""roundCount":2"#,
+                    r#""picker":3"#,
                 ],
             },
             TestCase {
@@ -616,6 +635,11 @@ mod test {
                 should_witness: false,
             },
             TestCase {
+                name: "HostSetPicker",
+                command: GameCommand::HostSetPicker { pid: 1 },
+                should_witness: false,
+            },
+            TestCase {
                 name: "Heartbeat",
                 command: GameCommand::Heartbeat {
                     hbid: 1,
@@ -692,6 +716,11 @@ mod test {
             TestCase {
                 name: "HostNextRound",
                 command: GameCommand::HostNextRound { round: 0 },
+                host_command: true,
+            },
+            TestCase {
+                name: "HostSetPicker",
+                command: GameCommand::HostSetPicker { pid: 1 },
                 host_command: true,
             },
             TestCase {

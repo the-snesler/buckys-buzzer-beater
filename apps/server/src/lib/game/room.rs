@@ -37,6 +37,9 @@ pub struct Room {
     pub round_index: usize,
     pub current_question: Option<(usize, usize)>, // (category_index, question_index)
     pub current_buzzer: Option<PlayerId>,
+    /// The player whose turn it is to choose the next clue. The host chooses who picks
+    /// first, so this is `None` until then, and clues can't be chosen without it.
+    pub picker: Option<PlayerId>,
     pub buzz_window: Option<BuzzWindow>,
     next_buzz_window_id: BuzzWindowId,
     pub last_activity: SystemTime,
@@ -56,6 +59,7 @@ impl fmt::Debug for Room {
             .field("category count", &self.current_categories().len())
             .field("current question", &self.current_question)
             .field("current buzzer", &self.current_buzzer)
+            .field("picker", &self.picker)
             .field("buzz window", &self.buzz_window)
             .finish()
     }
@@ -73,6 +77,7 @@ impl Room {
             round_index: 0,
             current_question: None,
             current_buzzer: None,
+            picker: None,
             buzz_window: None,
             next_buzz_window_id: 0,
             last_activity: SystemTime::now(),
@@ -176,6 +181,7 @@ impl Room {
             players,
             current_question: self.current_question,
             current_buzzer: self.current_buzzer,
+            picker: self.picker,
             winner: self.winner,
         }
     }
@@ -186,8 +192,7 @@ impl Room {
         GameEvent::PublicState {
             state: self.state.clone(),
             round: self.round_index,
-            // Nobody tracks whose pick it is yet
-            picker: None,
+            picker: self.picker,
         }
     }
 
@@ -234,6 +239,13 @@ impl Room {
                 category_index,
                 question_index,
             } => {
+                if self.picker.is_none() {
+                    tracing::info!(
+                        room_code = %self.code,
+                        "Ignoring HostChoice before the host chose who picks first"
+                    );
+                    return RoomResponse::new();
+                }
                 let unanswered = self
                     .current_categories()
                     .get(*category_index)
@@ -320,6 +332,20 @@ impl Room {
                 self.broadcast_state()
             }
 
+            GameCommand::HostSetPicker { pid } => {
+                if !self.players.iter().any(|p| p.player.pid == *pid) {
+                    tracing::info!(
+                        room_code = %self.code,
+                        pid,
+                        "Ignoring HostSetPicker for a player who isn't in the room"
+                    );
+                    return RoomResponse::new();
+                }
+                tracing::info!(room_code = %self.code, pid, "Host set the picker");
+                self.picker = Some(*pid);
+                self.broadcast_state()
+            }
+
             GameCommand::Heartbeat { hbid, t_dohb_recv } => {
                 if let Sender::Player(player_id) = sender
                     && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == player_id)
@@ -372,7 +398,9 @@ impl Room {
                 GameState::QuestionReading | GameState::WaitingForBuzz
             ),
             GameCommand::HostContinue => self.state == GameState::AnswerReveal,
-            GameCommand::HostNextRound { .. } => self.state == GameState::Selection,
+            GameCommand::HostNextRound { .. } | GameCommand::HostSetPicker { .. } => {
+                self.state == GameState::Selection
+            }
             GameCommand::Heartbeat { .. } | GameCommand::LatencyOfHeartbeat { .. } => true,
         }
     }
@@ -485,9 +513,15 @@ impl Room {
 
         if let Some(round) = next {
             self.round_index = round;
+            // When the game starts, the host chooses who picks first. In later rounds, as
+            // on TV, the player in last place picks first.
+            if self.state != GameState::Start {
+                self.picker = self.lowest_scorer();
+            }
             tracing::info!(
                 room_code = %self.code,
                 round = self.round_index,
+                picker = ?self.picker,
                 "Starting round"
             );
             self.state = GameState::Selection;
@@ -495,6 +529,16 @@ impl Room {
             self.determine_winner();
             self.state = GameState::GameEnd;
         }
+    }
+
+    /// The player with the lowest score. Ties go to the player who joined first (the lowest
+    /// pid), so the choice doesn't depend on the order of `players`.
+    fn lowest_scorer(&self) -> Option<PlayerId> {
+        self.players
+            .iter()
+            .map(|p| (p.player.score, p.player.pid))
+            .min()
+            .map(|(_, pid)| pid)
     }
 
     /// Sends the full game state to the host, the public state to every player, and each
@@ -541,6 +585,9 @@ impl Room {
         {
             if correct {
                 player.player.score += question_value;
+                // Whoever answers correctly picks next. After a wrong answer, or if nobody
+                // gets it, the picker stays the same.
+                self.picker = Some(buzzer_id);
             } else {
                 player.player.score -= question_value;
             }
@@ -730,7 +777,10 @@ mod tests {
             TestCase {
                 name: "HostChoice transitions to QuestionReading",
                 initial_state: GameState::Selection,
-                setup: |_| {},
+                setup: |room| {
+                    add_test_player(room, 1, "AJ");
+                    room.picker = Some(1);
+                },
                 command: GameCommand::HostChoice {
                     category_index: 0,
                     question_index: 0,
@@ -747,9 +797,10 @@ mod tests {
                 initial_state: GameState::Selection,
                 setup: |room| {
                     add_test_player(room, 1, "AJ");
-                    add_test_player(room, 1, "Sam");
+                    add_test_player(room, 2, "Sam");
                     room.players[0].player.buzzed = true;
                     room.players[1].player.buzzed = true;
+                    room.picker = Some(1);
                 },
                 command: GameCommand::HostChoice {
                     category_index: 0,
@@ -1314,6 +1365,12 @@ mod tests {
                 sender: Sender::Player(1),
             },
             TestCase {
+                name: "Player cannot choose who picks",
+                initial_state: GameState::Selection,
+                command: GameCommand::HostSetPicker { pid: 1 },
+                sender: Sender::Player(1),
+            },
+            TestCase {
                 name: "Host cannot buzz",
                 initial_state: GameState::WaitingForBuzz,
                 command: GameCommand::Buzz { reaction_ms: 100 },
@@ -1332,6 +1389,7 @@ mod tests {
 
             assert_eq!(room.state, tc.initial_state, "{}: state changed", tc.name);
             assert!(is_empty(&response), "{}: response not empty", tc.name);
+            assert_eq!(room.picker, None, "{}: picker changed", tc.name);
             assert_eq!(
                 room.players[0].player.score, 0,
                 "{}: score changed",
@@ -1521,6 +1579,58 @@ mod tests {
                 command: GameCommand::HostNextRound { round: 0 },
                 sender: Sender::Host,
             },
+            TestCase {
+                name: "HostChoice before the host chose who picks",
+                initial_state: GameState::Selection,
+                setup: |room| room.picker = None,
+                command: GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index: 1,
+                },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostSetPicker for a player who isn't in the room",
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostSetPicker { pid: 9 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostSetPicker before the game started",
+                initial_state: GameState::Start,
+                setup: |room| add_test_player(room, 2, "Sam"),
+                command: GameCommand::HostSetPicker { pid: 2 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostSetPicker while a question is being read",
+                initial_state: GameState::QuestionReading,
+                setup: |room| add_test_player(room, 2, "Sam"),
+                command: GameCommand::HostSetPicker { pid: 2 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostSetPicker while a player is answering",
+                initial_state: GameState::Answer,
+                setup: |room| add_test_player(room, 2, "Sam"),
+                command: GameCommand::HostSetPicker { pid: 2 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostSetPicker during the answer reveal",
+                initial_state: GameState::AnswerReveal,
+                setup: |room| add_test_player(room, 2, "Sam"),
+                command: GameCommand::HostSetPicker { pid: 2 },
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostSetPicker after the game ended",
+                initial_state: GameState::GameEnd,
+                setup: |room| add_test_player(room, 2, "Sam"),
+                command: GameCommand::HostSetPicker { pid: 2 },
+                sender: Sender::Host,
+            },
         ];
 
         for tc in test_cases {
@@ -1529,12 +1639,15 @@ mod tests {
             room.state = tc.initial_state.clone();
             room.current_question = Some((0, 0));
             room.current_buzzer = Some(1);
+            room.picker = Some(1);
             (tc.setup)(&mut room);
+            let picker = room.picker;
 
             let response = room.handle_command(&tc.command, tc.sender);
 
             assert_eq!(room.state, tc.initial_state, "{}: state changed", tc.name);
             assert!(is_empty(&response), "{}: response not empty", tc.name);
+            assert_eq!(room.picker, picker, "{}: picker changed", tc.name);
             assert_eq!(
                 room.current_question,
                 Some((0, 0)),
@@ -1585,7 +1698,10 @@ mod tests {
             question.answer = format!("Secret answer {i}");
         }
 
-        let mut responses = vec![room.handle_command(&GameCommand::StartGame, Sender::Host)];
+        let mut responses = vec![
+            room.handle_command(&GameCommand::StartGame, Sender::Host),
+            room.handle_command(&GameCommand::HostSetPicker { pid: 1 }, Sender::Host),
+        ];
         for question_index in 0..2 {
             responses.push(room.handle_command(
                 &GameCommand::HostChoice {
@@ -2055,6 +2171,7 @@ mod tests {
             reported_rounds(&response),
             (vec![0], vec![(0, 2, "Test Category".to_string())])
         );
+        room.handle_command(&GameCommand::HostSetPicker { pid: 1 }, Sender::Host);
 
         play_clue(&mut room, 0, 0, 1, true);
         let response = play_clue(&mut room, 0, 1, 2, true);
@@ -2088,5 +2205,270 @@ mod tests {
         );
         assert_eq!(room.players[0].player.score, 1000);
         assert_eq!(room.players[1].player.score, 400);
+    }
+
+    /// The picker reported to the players in `response`'s public states
+    fn reported_pickers(response: &RoomResponse) -> Vec<Option<PlayerId>> {
+        response
+            .messages_to_players
+            .iter()
+            .filter_map(|msg| match msg {
+                GameEvent::PublicState { picker, .. } => Some(*picker),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn reported_host_pickers(response: &RoomResponse) -> Vec<Option<PlayerId>> {
+        response
+            .messages_to_host
+            .iter()
+            .filter_map(|msg| match msg {
+                GameEvent::GameState { picker, .. } => Some(*picker),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_host_chooses_who_picks_first() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "AJ");
+        add_test_player(&mut room, 2, "Sam");
+
+        let response = room.handle_command(&GameCommand::StartGame, Sender::Host);
+        assert_eq!(room.picker, None, "Nobody picks until the host says so");
+        assert_eq!(reported_pickers(&response), vec![None]);
+
+        let choice = GameCommand::HostChoice {
+            category_index: 0,
+            question_index: 0,
+        };
+        let response = room.handle_command(&choice, Sender::Host);
+        assert!(is_empty(&response), "HostChoice needs a picker");
+        assert_eq!(room.state, GameState::Selection);
+        assert_eq!(room.current_question, None);
+
+        let response = room.handle_command(&GameCommand::HostSetPicker { pid: 2 }, Sender::Host);
+        assert_eq!(room.picker, Some(2));
+        assert_eq!(reported_pickers(&response), vec![Some(2)]);
+        assert_eq!(reported_host_pickers(&response), vec![Some(2)]);
+
+        // The host can change their mind
+        room.handle_command(&GameCommand::HostSetPicker { pid: 1 }, Sender::Host);
+        assert_eq!(room.picker, Some(1));
+
+        room.handle_command(&choice, Sender::Host);
+        assert_eq!(room.state, GameState::QuestionReading);
+    }
+
+    /// Chooses clue (0, 0) and opens buzzing
+    fn open_clue(room: &mut Room) {
+        room.handle_command(
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 0,
+            },
+            Sender::Host,
+        );
+        room.handle_command(&GameCommand::HostReady, Sender::Host);
+    }
+
+    /// `pid` buzzes in on the open clue and is judged
+    fn buzz_and_judge(room: &mut Room, pid: PlayerId, correct: bool) {
+        let window = buzz(room, pid, 200)
+            .buzz_window_opened
+            .expect("Buzz should open a window");
+        room.resolve_buzz_window(window);
+        room.handle_command(&GameCommand::HostChecked { correct }, Sender::Host);
+    }
+
+    #[test]
+    fn test_picker_after_a_clue() {
+        struct TestCase {
+            name: &'static str,
+            play: fn(&mut Room),
+            expected_picker: PlayerId,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "A correct answer makes the answerer the picker",
+                play: |room| {
+                    open_clue(room);
+                    buzz_and_judge(room, 2, true);
+                },
+                expected_picker: 2,
+            },
+            TestCase {
+                name: "The picker answering correctly keeps picking",
+                play: |room| {
+                    open_clue(room);
+                    buzz_and_judge(room, 1, true);
+                },
+                expected_picker: 1,
+            },
+            TestCase {
+                name: "A correct answer on the rebound makes that player the picker",
+                play: |room| {
+                    open_clue(room);
+                    buzz_and_judge(room, 2, false);
+                    buzz_and_judge(room, 3, true);
+                },
+                expected_picker: 3,
+            },
+            TestCase {
+                name: "A wrong answer, then a skip, keeps the picker",
+                play: |room| {
+                    open_clue(room);
+                    buzz_and_judge(room, 2, false);
+                    room.handle_command(&GameCommand::HostSkip, Sender::Host);
+                },
+                expected_picker: 1,
+            },
+            TestCase {
+                name: "Everyone wrong keeps the picker",
+                play: |room| {
+                    open_clue(room);
+                    buzz_and_judge(room, 2, false);
+                    buzz_and_judge(room, 3, false);
+                    buzz_and_judge(room, 1, false);
+                },
+                expected_picker: 1,
+            },
+            TestCase {
+                name: "A skip keeps the picker",
+                play: |room| {
+                    room.handle_command(
+                        &GameCommand::HostChoice {
+                            category_index: 0,
+                            question_index: 0,
+                        },
+                        Sender::Host,
+                    );
+                    room.handle_command(&GameCommand::HostSkip, Sender::Host);
+                },
+                expected_picker: 1,
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = create_test_room();
+            add_test_player(&mut room, 1, "AJ");
+            add_test_player(&mut room, 2, "Sam");
+            add_test_player(&mut room, 3, "Lee");
+            room.state = GameState::Selection;
+            room.picker = Some(1);
+
+            (tc.play)(&mut room);
+            assert_eq!(room.state, GameState::AnswerReveal, "{}: state", tc.name);
+
+            let response = room.handle_command(&GameCommand::HostContinue, Sender::Host);
+            assert_eq!(room.state, GameState::Selection, "{}: state", tc.name);
+            assert_eq!(room.picker, Some(tc.expected_picker), "{}", tc.name);
+            assert_eq!(
+                reported_pickers(&response),
+                vec![Some(tc.expected_picker)],
+                "{}: players not told the picker",
+                tc.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_lowest_scorer_picks_first_in_a_new_round() {
+        struct TestCase {
+            name: &'static str,
+            scores: [i32; 3],
+            expected_picker: PlayerId,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Last place picks",
+                scores: [600, -200, 400],
+                expected_picker: 2,
+            },
+            TestCase {
+                name: "A tie for last place goes to the lowest pid",
+                scores: [600, 0, 0],
+                expected_picker: 2,
+            },
+            TestCase {
+                name: "The picker can be last place",
+                scores: [-400, 0, 200],
+                expected_picker: 1,
+            },
+        ];
+
+        for tc in test_cases {
+            for end_round in [
+                GameCommand::HostNextRound { round: 0 },
+                GameCommand::HostContinue,
+            ] {
+                let mut room = create_two_round_room();
+                // Players in an order other than by pid, so ties can't depend on it
+                for (pid, name) in [(3, "Lee"), (1, "AJ"), (2, "Sam")] {
+                    add_test_player(&mut room, pid, name);
+                }
+                for entry in &mut room.players {
+                    entry.player.score = tc.scores[entry.player.pid as usize - 1];
+                }
+                room.picker = Some(3);
+                if matches!(end_round, GameCommand::HostContinue) {
+                    answer_round(&mut room, 0);
+                    room.state = GameState::AnswerReveal;
+                    room.current_question = Some((0, 1));
+                } else {
+                    room.state = GameState::Selection;
+                }
+
+                let response = room.handle_command(&end_round, Sender::Host);
+
+                let name = format!("{} ({})", tc.name, end_round.name());
+                assert_eq!(room.round_index, 1, "{name}: round");
+                assert_eq!(room.picker, Some(tc.expected_picker), "{name}");
+                assert_eq!(
+                    reported_pickers(&response),
+                    vec![Some(tc.expected_picker)],
+                    "{name}: players not told the picker"
+                );
+                assert_eq!(
+                    reported_host_pickers(&response),
+                    vec![Some(tc.expected_picker)],
+                    "{name}: host not told the picker"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_host_overrides_the_new_round_picker() {
+        let mut room = create_two_round_room();
+        add_test_player(&mut room, 1, "AJ");
+        add_test_player(&mut room, 2, "Sam");
+        room.players[0].player.score = 1000;
+        room.state = GameState::Selection;
+        room.picker = Some(1);
+
+        room.handle_command(&GameCommand::HostNextRound { round: 0 }, Sender::Host);
+        assert_eq!(room.picker, Some(2));
+
+        room.handle_command(&GameCommand::HostSetPicker { pid: 1 }, Sender::Host);
+        assert_eq!(room.picker, Some(1));
+    }
+
+    #[test]
+    fn test_start_game_skipping_a_round_leaves_the_picker_to_the_host() {
+        let mut room = create_two_round_room();
+        add_test_player(&mut room, 1, "AJ");
+        add_test_player(&mut room, 2, "Sam");
+        room.players[1].player.score = -100;
+        answer_round(&mut room, 0);
+
+        room.handle_command(&GameCommand::StartGame, Sender::Host);
+
+        assert_eq!(room.round_index, 1);
+        assert_eq!(room.picker, None);
     }
 }

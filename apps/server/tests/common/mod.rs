@@ -265,9 +265,10 @@ pub fn get_player_score(
         .score
 }
 
-/// Start game and consume initial messages
-pub async fn start_game(host_ws: &mut WsStream, player_ws_list: &mut [&mut WsStream]) {
+/// Start the game, have `picker` choose the first clue, and consume the resulting messages
+pub async fn start_game(host_ws: &mut WsStream, player_ws_list: &mut [&mut WsStream], picker: u32) {
     send_cmd_and_recv_all(host_ws, &GameCommand::StartGame).await;
+    send_cmd_and_recv_all(host_ws, &GameCommand::HostSetPicker { pid: picker }).await;
 
     for player_ws in player_ws_list {
         let _ = recv_msgs(player_ws).await;

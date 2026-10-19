@@ -174,7 +174,7 @@ mod gameplay_tests {
         let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
         let _ = recv_msgs(&mut host_ws).await; // Consume host update
 
-        start_game(&mut host_ws, &mut [&mut player_ws]).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
 
         send_cmd_and_recv_all(
             &mut host_ws,
@@ -248,7 +248,7 @@ mod gameplay_tests {
 
         let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
         let _ = recv_msgs(&mut host_ws).await;
-        start_game(&mut host_ws, &mut [&mut player_ws]).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
         let player_token = {
             let room_map = state.room_map.lock().await;
             let room = room_map.get(&room_code).expect("Could not find room");
@@ -368,7 +368,7 @@ mod gameplay_tests {
         let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut player_ws]).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
 
         play_question(&mut host_ws, &mut player_ws, 0, 0, true).await;
 
@@ -401,7 +401,7 @@ mod gameplay_tests {
         let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut player_ws]).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
 
         play_question(&mut host_ws, &mut player_ws, 0, 0, false).await;
 
@@ -432,10 +432,10 @@ mod gameplay_tests {
             connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
         let _initial = recv_msgs(&mut host_ws).await;
 
-        let (mut player_ws, _player_id) = add_player(port, &room_code, "AJ").await;
+        let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut player_ws]).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
 
         send_cmd_and_recv_all(
             &mut host_ws,
@@ -525,6 +525,7 @@ mod gameplay_tests {
         let mut sam_texts = recv_texts(&mut sam_ws).await;
 
         send_cmd_and_recv_all(&mut host_ws, &GameCommand::StartGame).await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostSetPicker { pid: 1 }).await;
         send_cmd_and_recv_all(
             &mut host_ws,
             &GameCommand::HostChoice {
@@ -712,6 +713,7 @@ mod gameplay_tests {
 
         // Every one of these sends the player several messages that nobody reads
         send_cmd(&mut host_ws, &GameCommand::StartGame).await;
+        send_cmd(&mut host_ws, &GameCommand::HostSetPicker { pid: player_id }).await;
         for question_index in 0..QUESTIONS {
             send_cmd(
                 &mut host_ws,
@@ -790,7 +792,7 @@ mod gameplay_tests {
         let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws]).await;
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
 
         // Question 1: AJ buzzes and gets it correct (+100)
         play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
@@ -893,7 +895,7 @@ mod gameplay_tests {
         let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws]).await;
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
 
         // Clearing the Jeopardy board (+200, +400) starts Double Jeopardy
         play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
@@ -1013,7 +1015,7 @@ mod gameplay_tests {
         let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws]).await;
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
 
         send_cmd_and_recv_all(
             &mut host_ws,
