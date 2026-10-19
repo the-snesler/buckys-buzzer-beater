@@ -30,7 +30,11 @@ pub struct Room {
     pub state: GameState,
     pub host: Option<HostEntry>,
     pub players: Vec<PlayerEntry>,
-    pub categories: Vec<Category>,
+    /// The board of each round, in order: Jeopardy, then Double Jeopardy if the game has
+    /// one. There is always at least one round.
+    pub rounds: Vec<Vec<Category>>,
+    /// Index into `rounds` of the round being played
+    pub round_index: usize,
     pub current_question: Option<(usize, usize)>, // (category_index, question_index)
     pub current_buzzer: Option<PlayerId>,
     pub buzz_window: Option<BuzzWindow>,
@@ -47,7 +51,9 @@ impl fmt::Debug for Room {
             .field("host", &self.host)
             .field("state", &self.state)
             .field("players", &self.players)
-            .field("category count", &self.categories.len())
+            .field("round", &self.round_index)
+            .field("round count", &self.rounds.len())
+            .field("category count", &self.current_categories().len())
             .field("current question", &self.current_question)
             .field("current buzzer", &self.current_buzzer)
             .field("buzz window", &self.buzz_window)
@@ -63,7 +69,8 @@ impl Room {
             state: GameState::default(),
             host: None,
             players: Vec::new(),
-            categories: Vec::new(),
+            rounds: vec![Vec::new()],
+            round_index: 0,
             current_question: None,
             current_buzzer: None,
             buzz_window: None,
@@ -75,6 +82,17 @@ impl Room {
 
     pub fn touch(&mut self) {
         self.last_activity = SystemTime::now();
+    }
+
+    /// The board of the round being played
+    pub fn current_categories(&self) -> &[Category] {
+        self.rounds.get(self.round_index).map_or(&[], Vec::as_slice)
+    }
+
+    pub fn current_categories_mut(&mut self) -> &mut [Category] {
+        self.rounds
+            .get_mut(self.round_index)
+            .map_or(&mut [], Vec::as_mut_slice)
     }
 }
 
@@ -152,7 +170,9 @@ impl Room {
 
         GameEvent::GameState {
             state: self.state.clone(),
-            categories: self.categories.clone(),
+            categories: self.current_categories().to_vec(),
+            round: self.round_index,
+            round_count: self.rounds.len(),
             players,
             current_question: self.current_question,
             current_buzzer: self.current_buzzer,
@@ -165,8 +185,8 @@ impl Room {
     pub fn build_public_state_msg(&self) -> GameEvent {
         GameEvent::PublicState {
             state: self.state.clone(),
-            // Games have a single round, and nobody tracks whose pick it is yet
-            round: 0,
+            round: self.round_index,
+            // Nobody tracks whose pick it is yet
             picker: None,
         }
     }
@@ -215,7 +235,7 @@ impl Room {
                 question_index,
             } => {
                 let unanswered = self
-                    .categories
+                    .current_categories()
                     .get(*category_index)
                     .and_then(|cat| cat.questions.get(*question_index))
                     .is_some_and(|q| !q.answered);
@@ -280,6 +300,16 @@ impl Room {
 
             GameCommand::HostContinue => self.handle_host_continue(),
 
+            GameCommand::HostNextRound => {
+                tracing::info!(
+                    room_code = %self.code,
+                    round = self.round_index,
+                    "Host ended the round early"
+                );
+                self.finish_round();
+                self.broadcast_state()
+            }
+
             GameCommand::Heartbeat { hbid, t_dohb_recv } => {
                 if let Sender::Player(player_id) = sender
                     && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == player_id)
@@ -332,6 +362,7 @@ impl Room {
                 GameState::QuestionReading | GameState::WaitingForBuzz
             ),
             GameCommand::HostContinue => self.state == GameState::AnswerReveal,
+            GameCommand::HostNextRound => self.state == GameState::Selection,
             GameCommand::Heartbeat { .. } | GameCommand::LatencyOfHeartbeat { .. } => true,
         }
     }
@@ -385,7 +416,7 @@ impl Room {
         );
 
         if let Some(question) = self
-            .categories
+            .current_categories_mut()
             .get_mut(cat_idx)
             .and_then(|cat| cat.questions.get_mut(q_idx))
         {
@@ -407,21 +438,44 @@ impl Room {
             player.player.buzzed = false;
         }
 
-        self.state = if self.has_remaining_questions() {
-            GameState::Selection
+        if self.has_remaining_questions() {
+            self.state = GameState::Selection;
         } else {
-            // No more questions, determine the winner and end
-            self.determine_winner();
-            GameState::GameEnd
-        };
+            self.finish_round();
+        }
 
         tracing::debug!(
             next_state = ?self.state,
+            round = self.round_index,
             winner = ?self.winner,
             "Transitioning after answer reveal"
         );
 
         self.broadcast_state()
+    }
+
+    /// Moves on from the current round, whether or not its board is cleared: to the next
+    /// round's board if there is one, otherwise to the end of the game
+    fn finish_round(&mut self) {
+        self.current_question = None;
+        self.current_buzzer = None;
+        self.buzz_window = None;
+        for player in &mut self.players {
+            player.player.buzzed = false;
+        }
+
+        if self.round_index + 1 < self.rounds.len() {
+            self.round_index += 1;
+            tracing::info!(
+                room_code = %self.code,
+                round = self.round_index,
+                "Starting the next round"
+            );
+            self.state = GameState::Selection;
+        } else {
+            self.determine_winner();
+            self.state = GameState::GameEnd;
+        }
     }
 
     /// Sends the full game state to the host, the public state to every player, and each
@@ -446,9 +500,12 @@ impl Room {
             return RoomResponse::new();
         };
 
+        // Borrows `rounds` directly, rather than through `current_categories_mut`, so that
+        // the players can be updated while the question is borrowed
         let question = self
-            .categories
-            .get_mut(cat_idx)
+            .rounds
+            .get_mut(self.round_index)
+            .and_then(|categories| categories.get_mut(cat_idx))
             .and_then(|cat| cat.questions.get_mut(q_idx));
 
         let question_value = question.as_ref().map(|q| q.value as i32);
@@ -484,8 +541,9 @@ impl Room {
         self.broadcast_state()
     }
 
+    /// Whether the current round's board has any clues left
     fn has_remaining_questions(&self) -> bool {
-        self.categories
+        self.current_categories()
             .iter()
             .any(|cat| cat.questions.iter().any(|q| !q.answered))
     }
@@ -502,7 +560,7 @@ mod tests {
     fn create_test_room() -> Room {
         let mut room = Room::new(RoomCode::from("TEST".to_string()), HostToken::generate());
 
-        room.categories = vec![Category {
+        room.rounds = vec![vec![Category {
             title: "Test Category".to_string(),
             questions: vec![
                 Question {
@@ -518,8 +576,31 @@ mod tests {
                     answered: false,
                 },
             ],
-        }];
+        }]];
 
+        room
+    }
+
+    /// A test room whose second round is a Double Jeopardy board worth 400 and 800
+    fn create_two_round_room() -> Room {
+        let mut room = create_test_room();
+        room.rounds.push(vec![Category {
+            title: "Double Category".to_string(),
+            questions: vec![
+                Question {
+                    question: "What is 10 * 10?".to_string(),
+                    answer: "100".to_string(),
+                    value: 400,
+                    answered: false,
+                },
+                Question {
+                    question: "What is 2 ^ 10?".to_string(),
+                    answer: "1024".to_string(),
+                    value: 800,
+                    answered: false,
+                },
+            ],
+        }]);
         room
     }
 
@@ -544,7 +625,7 @@ mod tests {
         room.state = GameState::Answer;
         room.current_question = Some((0, 1));
         room.current_buzzer = Some(1);
-        room.categories[0].questions[0].answered = true;
+        room.rounds[0][0].questions[0].answered = true;
 
         room.handle_command(&GameCommand::HostChecked { correct: true }, Sender::Host);
         room.handle_command(&GameCommand::HostContinue, Sender::Host);
@@ -775,7 +856,7 @@ mod tests {
                 setup: |room| {
                     add_test_player(room, 1, "AJ");
                     room.state = GameState::Answer;
-                    room.categories[0].questions[0].answered = true;
+                    room.rounds[0][0].questions[0].answered = true;
                     room.current_question = Some((0, 1));
                     room.current_buzzer = Some(1);
                 },
@@ -816,7 +897,7 @@ mod tests {
                 tc.name
             );
             assert_eq!(
-                room.categories[cat_idx].questions[q_idx].answered, tc.question_answered,
+                room.rounds[0][cat_idx].questions[q_idx].answered, tc.question_answered,
                 "Test case failed (answered): {}",
                 tc.name
             );
@@ -834,7 +915,7 @@ mod tests {
         room.handle_command(&GameCommand::HostSkip {}, Sender::Host);
 
         assert!(
-            room.categories[0].questions[0].answered,
+            room.rounds[0][0].questions[0].answered,
             "Skipped question should be marked as answered"
         );
         assert_eq!(
@@ -879,7 +960,7 @@ mod tests {
         room.players[1].player.score = 200;
 
         room.state = GameState::WaitingForBuzz;
-        room.categories[0].questions[0].answered = true;
+        room.rounds[0][0].questions[0].answered = true;
         room.current_question = Some((0, 1)); // Last question
 
         room.handle_command(&GameCommand::HostSkip {}, Sender::Host);
@@ -1060,7 +1141,7 @@ mod tests {
             "Score should not change after skip"
         );
         assert!(
-            room.categories[0].questions[0].answered,
+            room.rounds[0][0].questions[0].answered,
             "Question should be marked as answered"
         );
 
@@ -1084,7 +1165,7 @@ mod tests {
         room.players[1].player.score = 200;
 
         room.state = GameState::Answer;
-        room.categories[0].questions[0].answered = true; // First question already answered
+        room.rounds[0][0].questions[0].answered = true; // First question already answered
         room.current_question = Some((0, 1)); // Last question
         room.current_buzzer = Some(1);
 
@@ -1203,6 +1284,12 @@ mod tests {
                 sender: Sender::Player(1),
             },
             TestCase {
+                name: "Player cannot end the round",
+                initial_state: GameState::Selection,
+                command: GameCommand::HostNextRound,
+                sender: Sender::Player(1),
+            },
+            TestCase {
                 name: "Host cannot buzz",
                 initial_state: GameState::WaitingForBuzz,
                 command: GameCommand::Buzz { reaction_ms: 100 },
@@ -1211,7 +1298,7 @@ mod tests {
         ];
 
         for tc in test_cases {
-            let mut room = create_test_room();
+            let mut room = create_two_round_room();
             add_test_player(&mut room, 1, "AJ");
             room.state = tc.initial_state.clone();
             room.current_question = Some((0, 0));
@@ -1227,7 +1314,7 @@ mod tests {
                 tc.name
             );
             assert!(
-                !room.categories[0].questions[0].answered,
+                !room.rounds[0][0].questions[0].answered,
                 "{}: question marked answered",
                 tc.name
             );
@@ -1236,6 +1323,7 @@ mod tests {
                 "{}: buzz window opened",
                 tc.name
             );
+            assert_eq!(room.round_index, 0, "{}: round changed", tc.name);
         }
     }
 
@@ -1270,7 +1358,7 @@ mod tests {
             TestCase {
                 name: "HostChoice of an answered question",
                 initial_state: GameState::Selection,
-                setup: |room| room.categories[0].questions[1].answered = true,
+                setup: |room| room.rounds[0][0].questions[1].answered = true,
                 command: GameCommand::HostChoice {
                     category_index: 0,
                     question_index: 1,
@@ -1367,10 +1455,52 @@ mod tests {
                 command: GameCommand::EndGame,
                 sender: Sender::Host,
             },
+            TestCase {
+                name: "HostNextRound before the game started",
+                initial_state: GameState::Start,
+                setup: |_| {},
+                command: GameCommand::HostNextRound,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostNextRound while a question is being read",
+                initial_state: GameState::QuestionReading,
+                setup: |_| {},
+                command: GameCommand::HostNextRound,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostNextRound while waiting for a buzz",
+                initial_state: GameState::WaitingForBuzz,
+                setup: |_| {},
+                command: GameCommand::HostNextRound,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostNextRound while a player is answering",
+                initial_state: GameState::Answer,
+                setup: |_| {},
+                command: GameCommand::HostNextRound,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostNextRound during the answer reveal",
+                initial_state: GameState::AnswerReveal,
+                setup: |_| {},
+                command: GameCommand::HostNextRound,
+                sender: Sender::Host,
+            },
+            TestCase {
+                name: "HostNextRound after the game ended",
+                initial_state: GameState::GameEnd,
+                setup: |_| {},
+                command: GameCommand::HostNextRound,
+                sender: Sender::Host,
+            },
         ];
 
         for tc in test_cases {
-            let mut room = create_test_room();
+            let mut room = create_two_round_room();
             add_test_player(&mut room, 1, "AJ");
             room.state = tc.initial_state.clone();
             room.current_question = Some((0, 0));
@@ -1398,6 +1528,7 @@ mod tests {
                 "{}: buzz window opened",
                 tc.name
             );
+            assert_eq!(room.round_index, 0, "{}: round changed", tc.name);
         }
     }
 
@@ -1426,7 +1557,7 @@ mod tests {
         let mut room = create_test_room();
         add_test_player(&mut room, 1, "AJ");
         add_test_player(&mut room, 2, "Sam");
-        for (i, question) in room.categories[0].questions.iter_mut().enumerate() {
+        for (i, question) in room.rounds[0][0].questions.iter_mut().enumerate() {
             question.answer = format!("Secret answer {i}");
         }
 
@@ -1466,12 +1597,7 @@ mod tests {
             .players
             .iter()
             .map(|p| p.player.token.to_string())
-            .chain(
-                room.categories[0]
-                    .questions
-                    .iter()
-                    .map(|q| q.answer.clone()),
-            )
+            .chain(room.rounds[0][0].questions.iter().map(|q| q.answer.clone()))
             .collect();
 
         let mut public_states = 0;
@@ -1608,5 +1734,248 @@ mod tests {
         assert_eq!(room.state, GameState::WaitingForBuzz);
         room.resolve_buzz_window(new_id);
         assert_eq!(room.current_buzzer, Some(1));
+    }
+
+    fn answer_round(room: &mut Room, round: usize) {
+        for category in &mut room.rounds[round] {
+            for question in &mut category.questions {
+                question.answered = true;
+            }
+        }
+    }
+
+    #[test]
+    fn test_round_transitions() {
+        struct TestCase {
+            name: &'static str,
+            create_room: fn() -> Room,
+            initial_state: GameState,
+            setup: fn(&mut Room),
+            command: GameCommand,
+            expected_state: GameState,
+            expected_round: usize,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Clues left in the round returns to the board",
+                create_room: create_two_round_room,
+                initial_state: GameState::AnswerReveal,
+                setup: |room| {
+                    room.rounds[0][0].questions[0].answered = true;
+                    room.current_question = Some((0, 0));
+                },
+                command: GameCommand::HostContinue,
+                expected_state: GameState::Selection,
+                expected_round: 0,
+            },
+            TestCase {
+                name: "Clearing the Jeopardy board starts Double Jeopardy",
+                create_room: create_two_round_room,
+                initial_state: GameState::AnswerReveal,
+                setup: |room| {
+                    answer_round(room, 0);
+                    room.current_question = Some((0, 1));
+                },
+                command: GameCommand::HostContinue,
+                expected_state: GameState::Selection,
+                expected_round: 1,
+            },
+            TestCase {
+                name: "Clearing the Double Jeopardy board ends the game",
+                create_room: create_two_round_room,
+                initial_state: GameState::AnswerReveal,
+                setup: |room| {
+                    room.round_index = 1;
+                    answer_round(room, 1);
+                    room.current_question = Some((0, 1));
+                },
+                command: GameCommand::HostContinue,
+                expected_state: GameState::GameEnd,
+                expected_round: 1,
+            },
+            TestCase {
+                name: "Clearing the board of a single-round game ends the game",
+                create_room: create_test_room,
+                initial_state: GameState::AnswerReveal,
+                setup: |room| {
+                    answer_round(room, 0);
+                    room.current_question = Some((0, 1));
+                },
+                command: GameCommand::HostContinue,
+                expected_state: GameState::GameEnd,
+                expected_round: 0,
+            },
+            TestCase {
+                name: "HostNextRound with clues left starts Double Jeopardy",
+                create_room: create_two_round_room,
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostNextRound,
+                expected_state: GameState::Selection,
+                expected_round: 1,
+            },
+            TestCase {
+                name: "HostNextRound in the last round ends the game",
+                create_room: create_two_round_room,
+                initial_state: GameState::Selection,
+                setup: |room| room.round_index = 1,
+                command: GameCommand::HostNextRound,
+                expected_state: GameState::GameEnd,
+                expected_round: 1,
+            },
+            TestCase {
+                name: "HostNextRound in a single-round game ends the game",
+                create_room: create_test_room,
+                initial_state: GameState::Selection,
+                setup: |_| {},
+                command: GameCommand::HostNextRound,
+                expected_state: GameState::GameEnd,
+                expected_round: 0,
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = (tc.create_room)();
+            add_test_player(&mut room, 1, "AJ");
+            add_test_player(&mut room, 2, "Sam");
+            room.players[0].player.score = 600;
+            room.players[0].player.buzzed = true;
+            room.state = tc.initial_state;
+            (tc.setup)(&mut room);
+
+            let response = room.handle_command(&tc.command, Sender::Host);
+
+            assert_eq!(room.state, tc.expected_state, "{}: state", tc.name);
+            assert_eq!(room.round_index, tc.expected_round, "{}: round", tc.name);
+            assert_eq!(room.current_question, None, "{}: question", tc.name);
+            assert!(
+                room.players.iter().all(|p| !p.player.buzzed),
+                "{}: buzz states not reset",
+                tc.name
+            );
+            assert_eq!(
+                room.players[0].player.score, 600,
+                "{}: score changed",
+                tc.name
+            );
+            if tc.expected_state == GameState::GameEnd {
+                assert_eq!(room.winner, Some(1), "{}: winner", tc.name);
+            }
+            assert!(
+                response.messages_to_players.iter().any(|msg| matches!(
+                    msg,
+                    GameEvent::PublicState { round, .. } if *round == tc.expected_round
+                )),
+                "{}: players not told the round",
+                tc.name
+            );
+        }
+    }
+
+    /// Plays one clue to the end: `pid` buzzes in and is judged, then the host continues.
+    /// Returns the response to the host continuing.
+    fn play_clue(
+        room: &mut Room,
+        category_index: usize,
+        question_index: usize,
+        pid: PlayerId,
+        correct: bool,
+    ) -> RoomResponse {
+        room.handle_command(
+            &GameCommand::HostChoice {
+                category_index,
+                question_index,
+            },
+            Sender::Host,
+        );
+        room.handle_command(&GameCommand::HostReady, Sender::Host);
+        let window = buzz(room, pid, 200)
+            .buzz_window_opened
+            .expect("Buzz should open a window");
+        room.resolve_buzz_window(window);
+        room.handle_command(&GameCommand::HostChecked { correct }, Sender::Host);
+        assert_eq!(room.state, GameState::AnswerReveal);
+        room.handle_command(&GameCommand::HostContinue, Sender::Host)
+    }
+
+    /// The rounds reported to the players and to the host in `response`, as
+    /// `(public rounds, (round, round count, first category title) per host state)`
+    fn reported_rounds(response: &RoomResponse) -> (Vec<usize>, Vec<(usize, usize, String)>) {
+        let public = response
+            .messages_to_players
+            .iter()
+            .filter_map(|msg| match msg {
+                GameEvent::PublicState { round, .. } => Some(*round),
+                _ => None,
+            })
+            .collect();
+        let host = response
+            .messages_to_host
+            .iter()
+            .filter_map(|msg| match msg {
+                GameEvent::GameState {
+                    round,
+                    round_count,
+                    categories,
+                    ..
+                } => Some((
+                    *round,
+                    *round_count,
+                    categories
+                        .first()
+                        .map(|c| c.title.clone())
+                        .unwrap_or_default(),
+                )),
+                _ => None,
+            })
+            .collect();
+        (public, host)
+    }
+
+    #[test]
+    fn test_two_round_game() {
+        let mut room = create_two_round_room();
+        add_test_player(&mut room, 1, "AJ");
+        add_test_player(&mut room, 2, "Sam");
+
+        let response = room.handle_command(&GameCommand::StartGame, Sender::Host);
+        assert_eq!(
+            reported_rounds(&response),
+            (vec![0], vec![(0, 2, "Test Category".to_string())])
+        );
+
+        play_clue(&mut room, 0, 0, 1, true);
+        let response = play_clue(&mut room, 0, 1, 2, true);
+
+        assert_eq!(room.state, GameState::Selection);
+        assert_eq!(room.round_index, 1);
+        assert_eq!(
+            reported_rounds(&response),
+            (vec![1], vec![(1, 2, "Double Category".to_string())]),
+            "Everyone should be told Double Jeopardy started"
+        );
+        assert_eq!(room.players[0].player.score, 200, "Scores carry over");
+        assert_eq!(room.players[1].player.score, 400, "Scores carry over");
+        assert!(
+            room.rounds[1][0].questions.iter().all(|q| !q.answered),
+            "The Double Jeopardy board starts full"
+        );
+
+        // Clue indices now refer to the Double Jeopardy board
+        play_clue(&mut room, 0, 1, 1, true);
+        assert_eq!(room.players[0].player.score, 1000);
+        assert!(room.rounds[1][0].questions[1].answered);
+        assert!(!room.rounds[1][0].questions[0].answered);
+
+        let response = room.handle_command(&GameCommand::HostNextRound, Sender::Host);
+        assert_eq!(room.state, GameState::GameEnd);
+        assert_eq!(room.winner, Some(1));
+        assert_eq!(
+            reported_rounds(&response),
+            (vec![1], vec![(1, 2, "Double Category".to_string())])
+        );
+        assert_eq!(room.players[0].player.score, 1000);
+        assert_eq!(room.players[1].player.score, 400);
     }
 }

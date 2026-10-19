@@ -607,7 +607,7 @@ mod gameplay_tests {
                     .iter()
                     .map(|p| p.player.token.to_string())
                     .collect(),
-                room.categories[0]
+                room.rounds[0][0]
                     .questions
                     .iter()
                     .map(|q| q.answer.clone())

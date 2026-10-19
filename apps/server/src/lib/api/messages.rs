@@ -55,6 +55,8 @@ pub enum GameCommand {
     },
     HostSkip,
     HostContinue,
+    /// Ends the current round early, moving on to the next round or ending the game
+    HostNextRound,
     Heartbeat {
         hbid: u32,
         #[serde(rename = "tDohbRecv")]
@@ -106,7 +108,8 @@ impl GameCommand {
             | Self::HostChoice { .. }
             | Self::HostChecked { .. }
             | Self::HostSkip
-            | Self::HostContinue => true,
+            | Self::HostContinue
+            | Self::HostNextRound => true,
             Self::Buzz { .. } | Self::Heartbeat { .. } | Self::LatencyOfHeartbeat { .. } => false,
         }
     }
@@ -122,6 +125,7 @@ impl GameCommand {
             Self::HostChecked { .. } => "HostChecked",
             Self::HostSkip => "HostSkip",
             Self::HostContinue => "HostContinue",
+            Self::HostNextRound => "HostNextRound",
             Self::Heartbeat { .. } => "Heartbeat",
             Self::LatencyOfHeartbeat { .. } => "LatencyOfHeartbeat",
         }
@@ -184,7 +188,12 @@ pub enum GameEvent {
     /// Sent to the host only, since it contains every clue's answer
     GameState {
         state: GameState,
+        /// The current round's board
         categories: Vec<Category>,
+        /// Zero-based index of the current round
+        round: usize,
+        #[serde(rename = "roundCount")]
+        round_count: usize,
         players: Vec<Player>,
         #[serde(rename = "currentQuestion")]
         current_question: Option<(usize, usize)>,
@@ -262,6 +271,11 @@ mod test {
                 name: "HostContinue",
                 json: r#"{"type": "HostContinue"}"#,
                 expected: GameCommand::HostContinue,
+            },
+            TestCase {
+                name: "HostNextRound",
+                json: r#"{"type": "HostNextRound"}"#,
+                expected: GameCommand::HostNextRound,
             },
             TestCase {
                 name: "HostChoice",
@@ -371,12 +385,20 @@ mod test {
                 event: GameEvent::GameState {
                     state: GameState::Start,
                     categories: vec![],
+                    round: 1,
+                    round_count: 2,
                     players: vec![],
                     current_question: None,
                     current_buzzer: None,
                     winner: None,
                 },
-                expected_substrings: vec![r#""type":"GameState""#, r#""state""#, r#""categories""#],
+                expected_substrings: vec![
+                    r#""type":"GameState""#,
+                    r#""state""#,
+                    r#""categories""#,
+                    r#""round":1"#,
+                    r#""roundCount":2"#,
+                ],
             },
             TestCase {
                 name: "PlayerState with camelCase",
@@ -581,6 +603,11 @@ mod test {
                 should_witness: false,
             },
             TestCase {
+                name: "HostNextRound",
+                command: GameCommand::HostNextRound,
+                should_witness: false,
+            },
+            TestCase {
                 name: "Heartbeat",
                 command: GameCommand::Heartbeat {
                     hbid: 1,
@@ -652,6 +679,11 @@ mod test {
             TestCase {
                 name: "HostContinue",
                 command: GameCommand::HostContinue,
+                host_command: true,
+            },
+            TestCase {
+                name: "HostNextRound",
+                command: GameCommand::HostNextRound,
                 host_command: true,
             },
             TestCase {

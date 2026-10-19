@@ -34,7 +34,7 @@ pub async fn create_room(
     let mut room = Room::new(code.clone(), host_token.clone());
 
     if let Some(categories) = body.categories {
-        room.categories = categories;
+        room.rounds = vec![categories];
     }
 
     room_map.insert(code.to_string(), room);

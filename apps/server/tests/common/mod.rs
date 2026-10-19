@@ -167,7 +167,7 @@ pub async fn add_room_category(state: &AppState, room_code: &str, question_count
         })
         .collect();
 
-    room.categories.insert(
+    room.rounds[0].insert(
         0,
         Category {
             questions,
