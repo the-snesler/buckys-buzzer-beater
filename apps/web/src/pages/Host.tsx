@@ -3,6 +3,7 @@ import { useWebSocket } from "../hooks/useWebSocket";
 import { useState, useRef, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import type { GameState, Player } from "../types/game";
+import { roundName } from "../lib/rounds";
 
 export default function Host() {
   console.log("Host mounted", new Date().toISOString());
@@ -76,6 +77,8 @@ export default function Host() {
           setGameState({
             state: message.state,
             categories: message.categories,
+            round: message.round,
+            roundCount: message.roundCount,
             players: message.players,
             currentQuestion: message.currentQuestion,
             currentBuzzer: message.currentBuzzer,
@@ -93,6 +96,18 @@ export default function Host() {
       }
     },
   });
+
+  const endRound = () => {
+    if (!gameState) return;
+    const current = roundName(gameState.round);
+    const message =
+      gameState.round + 1 < gameState.roundCount
+        ? `End ${current} now and start ${roundName(gameState.round + 1)}? The clues left on this board will be skipped.`
+        : `End ${current} now? This ends the game, and the clues left on the board will be skipped.`;
+    if (window.confirm(message)) {
+      sendMessage({ type: "HostNextRound" });
+    }
+  };
 
   if (!hostToken) {
     return (
@@ -139,16 +154,32 @@ export default function Host() {
         {gameState ? (
           <div className="space-y-6">
             {/* Current State Indicator */}
-            <div className="bg-gray-800 rounded-lg p-4">
+            <div className="bg-gray-800 rounded-lg p-4 flex justify-between items-center">
               <p className="text-gray-400 text-sm">
                 State: <span className="text-white font-semibold">{gameState.state}</span>
+              </p>
+              <p className="text-yellow-400 font-bold">
+                {roundName(gameState.round)}
+                {gameState.roundCount > 1 && (
+                  <span className="text-gray-400 font-normal text-sm ml-2">
+                    Round {gameState.round + 1} of {gameState.roundCount}
+                  </span>
+                )}
               </p>
             </div>
 
             {/* Selection State - Show game board */}
             {gameState.state === "selection" && (
               <div className="bg-gray-800 rounded-lg p-6">
-                <h2 className="text-2xl font-semibold text-white mb-4">Select a Question</h2>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-2xl font-semibold text-white">Select a Question</h2>
+                  <button
+                    onClick={endRound}
+                    className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500 text-sm font-semibold"
+                  >
+                    End Round
+                  </button>
+                </div>
                 <div className="overflow-x-auto">
                   <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)` }}>
                     {gameState.categories.map((category, catIdx) => (

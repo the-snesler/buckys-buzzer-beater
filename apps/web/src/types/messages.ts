@@ -42,5 +42,6 @@ export type GameCommand =
   | { type: "HostChecked"; correct: boolean }
   | { type: "HostSkip" }
   | { type: "HostContinue" }
+  | { type: "HostNextRound" }
   | { type: "Heartbeat"; hbid: number; tDohbRecv: number }
   | { type: "LatencyOfHeartbeat"; hbid: number; tLat: number };

@@ -35,7 +35,11 @@ export interface Player {
  */
 export interface GameState {
   state: GamePhase;
+  /** The current round's board */
   categories: Category[];
+  /** Zero-based index of the current round */
+  round: number;
+  roundCount: number;
   players: Player[];
   currentQuestion: [number, number] | null;
   currentBuzzer: PlayerId | null;
