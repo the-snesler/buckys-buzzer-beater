@@ -212,6 +212,7 @@ mod test {
                     "seed {seed}: Daily Double in the top row: {placed:?}"
                 );
                 let mut categories: Vec<usize> = placed.iter().map(|&(c, _)| c).collect();
+                categories.sort_unstable();
                 categories.dedup();
                 assert_eq!(
                     categories.len(),

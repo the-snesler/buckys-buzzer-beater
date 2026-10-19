@@ -21,6 +21,9 @@ pub async fn create_room(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateRoomRequest>,
 ) -> (StatusCode, Json<CreateRoomResponse>) {
+    // Built before taking the lock, which every room shares
+    let rounds = body.into_rounds(&mut rand::rng());
+
     let mut room_map = state.room_map.lock().await;
 
     // Generate a unique room code
@@ -34,7 +37,7 @@ pub async fn create_room(
     let host_token = HostToken::generate();
     let mut room = Room::new(code.clone(), host_token.clone());
 
-    room.rounds = body.into_rounds(&mut rand::rng());
+    room.rounds = rounds;
 
     room_map.insert(code.to_string(), room);
 
