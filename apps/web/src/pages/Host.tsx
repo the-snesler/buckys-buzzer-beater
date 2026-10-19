@@ -158,14 +158,14 @@ export default function Host() {
               <p className="text-gray-400 text-sm">
                 State: <span className="text-white font-semibold">{gameState.state}</span>
               </p>
-              <p className="text-yellow-400 font-bold">
-                {roundName(gameState.round)}
-                {gameState.roundCount > 1 && (
+              {gameState.roundCount > 1 && (
+                <p className="text-yellow-400 font-bold">
+                  {roundName(gameState.round)}
                   <span className="text-gray-400 font-normal text-sm ml-2">
                     Round {gameState.round + 1} of {gameState.roundCount}
                   </span>
-                )}
-              </p>
+                </p>
+              )}
             </div>
 
             {/* Selection State - Show game board */}
@@ -177,7 +177,7 @@ export default function Host() {
                     onClick={endRound}
                     className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500 text-sm font-semibold"
                   >
-                    End Round
+                    {gameState.round + 1 < gameState.roundCount ? "End Round" : "End Game"}
                   </button>
                 </div>
                 <div className="overflow-x-auto">
