@@ -362,6 +362,17 @@ impl Room {
             GameState::FinalWager | GameState::FinalAnswer | GameState::FinalReveal => {
                 self.final_view(player_id)
             }
+            // Once the responses were locked, everyone saw the clue, so players keep their
+            // own Final Jeopardy result on the game-over screen. A game ended before then
+            // shows nothing, rather than a clue that may never have been revealed.
+            GameState::GameEnd
+                if self
+                    .final_round
+                    .as_ref()
+                    .is_some_and(|f| !f.reveal_order.is_empty()) =>
+            {
+                self.final_view(player_id)
+            }
             GameState::Start
             | GameState::Selection
             | GameState::QuestionReading
@@ -375,12 +386,9 @@ impl Room {
     /// sent the correct response. A player who joined after the responses were locked has
     /// no entry and only watches.
     fn final_view(&self, player_id: PlayerId) -> WagerView {
-        let (Some(question), Some(entry)) = (
-            self.final_question.as_ref(),
-            self.final_round
-                .as_ref()
-                .and_then(|f| f.entries.get(&player_id)),
-        ) else {
+        let (Some(question), Some(entry)) =
+            (self.final_question.as_ref(), self.final_entry(player_id))
+        else {
             return WagerView::default();
         };
         let prompt = match self.state {
@@ -820,38 +828,32 @@ impl Room {
     /// Accepts a player's Final Jeopardy wager. It can be changed until the clue is
     /// revealed.
     fn handle_final_wager(&mut self, player_id: PlayerId, amount: u32) -> RoomResponse {
-        let Some(score) = self.score_of(player_id) else {
-            return RoomResponse::new();
-        };
-        let range = match self.final_wager_range(player_id) {
-            Some(range) => range,
-            None if score <= 0 => {
-                if amount == FINAL_FIXED_WAGER {
-                    return self.update_player(player_id);
-                }
-                tracing::info!(
-                    room_code = %self.code,
-                    player_id,
-                    amount,
-                    score,
-                    "Rejecting a Final Jeopardy wager from a player with nothing to wager"
-                );
-                return reject(
-                    player_id,
-                    "With a score of $0 or less, your wager is $1".to_string(),
-                );
+        if self.final_entry(player_id).is_none() {
+            tracing::info!(
+                room_code = %self.code,
+                player_id,
+                "Rejecting a Final Jeopardy wager from a player who isn't playing it"
+            );
+            return reject(
+                player_id,
+                "You joined too late to play Final Jeopardy".to_string(),
+            );
+        }
+        // Only a player with nothing to wager has no range, since their wager is $1
+        let Some(range) = self.final_wager_range(player_id) else {
+            if amount == FINAL_FIXED_WAGER {
+                return self.update_player(player_id);
             }
-            None => {
-                tracing::info!(
-                    room_code = %self.code,
-                    player_id,
-                    "Rejecting a Final Jeopardy wager from a player who isn't playing it"
-                );
-                return reject(
-                    player_id,
-                    "You joined too late to play Final Jeopardy".to_string(),
-                );
-            }
+            tracing::info!(
+                room_code = %self.code,
+                player_id,
+                amount,
+                "Rejecting a Final Jeopardy wager from a player with nothing to wager"
+            );
+            return reject(
+                player_id,
+                "With a score of $0 or less, your wager is $1".to_string(),
+            );
         };
         if !range.contains(amount) {
             tracing::info!(
@@ -896,6 +898,10 @@ impl Room {
         self.update_player(player_id)
     }
 
+    fn final_entry(&self, player_id: PlayerId) -> Option<&FinalEntry> {
+        self.final_round.as_ref()?.entries.get(&player_id)
+    }
+
     fn final_entry_mut(&mut self, player_id: PlayerId) -> Option<&mut FinalEntry> {
         self.final_round.as_mut()?.entries.get_mut(&player_id)
     }
@@ -922,6 +928,8 @@ impl Room {
             entries,
             ..FinalRound::default()
         });
+        // Nobody picks clues any more
+        self.picker = None;
         tracing::info!(
             room_code = %self.code,
             players = self.players.len(),
@@ -4246,6 +4254,9 @@ mod tests {
         assert_eq!(room.state, GameState::FinalWager);
         assert_eq!((score(&room, 1), score(&room, 2)), (600, -400));
         assert_eq!(room.winner, None, "Nobody wins before Final Jeopardy");
+        assert_eq!(room.picker, None, "Nobody picks in Final Jeopardy");
+        assert_eq!(reported_pickers(&response), vec![None]);
+        assert_eq!(reported_host_pickers(&response), vec![None]);
 
         let final_view = host_final_view(&response).expect("The host sees Final Jeopardy");
         assert_eq!(final_view.category, "Wisconsin Rivers");
@@ -4324,6 +4335,62 @@ mod tests {
                 .map(|e| (e.pid, e.correct))
                 .collect::<Vec<_>>(),
             vec![(2, Some(false)), (1, Some(true))]
+        );
+        assert_eq!(
+            player_final_view(&response, 2),
+            Some((
+                None,
+                Some(1),
+                Some("This river flows through Madison's lakes".to_string()),
+                false,
+                Some("What is the Wisconsin?".to_string()),
+                Some(false)
+            )),
+            "Sam keeps Sam's result on the game-over screen"
+        );
+    }
+
+    #[test]
+    fn test_ending_the_game_before_final_responses_are_locked() {
+        for reveal_clue in [false, true] {
+            let mut room = final_room(&[500, 0]);
+            wager(&mut room, 1, 500);
+            if reveal_clue {
+                room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host);
+                final_answer(&mut room, 1, "Yahara");
+            }
+
+            let response = room.handle_command(&GameCommand::EndGame, Sender::Host);
+
+            assert_eq!(
+                room.state,
+                GameState::GameEnd,
+                "clue revealed: {reveal_clue}"
+            );
+            assert_eq!(room.winner, Some(1), "Scores stay as they were");
+            assert_eq!(
+                player_final_view(&response, 1),
+                Some((None, None, None, false, None, None)),
+                "clue revealed: {reveal_clue}: a game that ended early shows no result"
+            );
+        }
+    }
+
+    #[test]
+    fn test_final_wager_from_a_player_who_isnt_playing() {
+        let mut room = final_room(&[500]);
+        // In the room but not in Final Jeopardy, which joining normally prevents
+        add_test_player(&mut room, 2, "Stray");
+        for amount in [0, 1, 2] {
+            let response = wager(&mut room, 2, amount);
+            let (to, reason) = rejection(&response).expect("The wager should be rejected");
+            assert_eq!(to, 2);
+            assert!(reason.contains("too late"), "{amount}: {reason}");
+        }
+        assert!(
+            room.final_round
+                .as_ref()
+                .is_some_and(|f| !f.entries.contains_key(&2))
         );
     }
 
@@ -4848,20 +4915,59 @@ mod tests {
 
     #[test]
     fn test_final_jeopardy_privacy() {
-        let mut room = final_room(&[3000, 2000, -500]);
+        let mut room = create_final_room();
+        for (pid, name, score) in [(1, "AJ", 3000), (2, "Sam", 2000), (3, "Lee", -500)] {
+            add_test_player(&mut room, pid, name);
+            if let Some(entry) = room.players.last_mut() {
+                entry.player.score = score;
+            }
+        }
+        room.round_index = 1;
+        room.state = GameState::Selection;
+        room.picker = Some(1);
         let wagers = [(1, 2345), (2, 1789)];
         let answers = [
             (1, "Secret response from AJ"),
             (2, "Secret response from Sam"),
             (3, "Secret response from Lee"),
         ];
+        let clue = final_question().question;
         let correct_response = final_question().answer;
 
-        // Each response, with whether the clue's correct response may be in it
-        let mut responses = vec![];
+        // Everything players are sent before the clue is revealed, including what a
+        // reconnecting player would be sent
+        let mut before_clue =
+            vec![room.handle_command(&GameCommand::HostNextRound { round: 1 }, Sender::Host)];
+        assert_eq!(room.state, GameState::FinalWager);
         for (pid, amount) in wagers {
-            responses.push(wager(&mut room, pid, amount));
+            before_clue.push(wager(&mut room, pid, amount));
         }
+        for pid in 1..=3 {
+            let mut reconnect = RoomResponse::new();
+            reconnect
+                .messages_to_players
+                .push(room.build_public_state_msg());
+            if let Some(msg) = room.build_player_state_msg(pid) {
+                reconnect.messages_to_specific.push((pid, msg));
+            }
+            before_clue.push(reconnect);
+        }
+        for response in &before_clue {
+            let to_players = response
+                .messages_to_players
+                .iter()
+                .chain(response.messages_to_specific.iter().map(|(_, msg)| msg))
+                .chain(response.witness.iter());
+            for msg in to_players {
+                let json = serde_json::to_string(msg).expect("Failed to serialize event");
+                assert!(
+                    !json.contains(&clue),
+                    "Clue sent before it was revealed: {json}"
+                );
+            }
+        }
+
+        let mut responses = before_clue;
         responses.push(room.handle_command(&GameCommand::HostRevealFinalClue, Sender::Host));
         for (pid, answer) in answers {
             responses.push(final_answer(&mut room, pid, answer));
