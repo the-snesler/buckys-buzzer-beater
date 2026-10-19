@@ -4,6 +4,7 @@ import React from "react";
 import { QRCodeSVG } from "qrcode.react";
 import type { GameState, Player } from "../types/game";
 import { roundName } from "../lib/rounds";
+import { formatMoney } from "../lib/money";
 
 /** How long the banner announcing a new round covers the board */
 const ROUND_BANNER_MS = 4000;
@@ -258,7 +259,7 @@ export default function HostDisplay() {
             <p className="text-xl text-red-200 mb-4">
               {gameState.categories[gameState.currentQuestion[0]]?.title} -{" "}
               {gameState.ddWager !== null
-                ? `Daily Double for $${gameState.ddWager}`
+                ? `Daily Double for ${formatMoney(gameState.ddWager)}`
                 : `$${
                     gameState.categories[gameState.currentQuestion[0]]?.questions[
                       gameState.currentQuestion[1]
@@ -288,7 +289,7 @@ export default function HostDisplay() {
             <p className="text-xl text-red-200 mb-4">
               {gameState.categories[gameState.currentQuestion[0]]?.title} -{" "}
               {gameState.ddWager !== null
-                ? `Daily Double for $${gameState.ddWager}`
+                ? `Daily Double for ${formatMoney(gameState.ddWager)}`
                 : `$${gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.value}`}
             </p>
 
@@ -336,7 +337,7 @@ export default function HostDisplay() {
                           : ""
                       }`}
                     >
-                      ${player.score}
+                      {formatMoney(player.score)}
                     </span>
                   </div>
                 ))}
@@ -377,7 +378,7 @@ export default function HostDisplay() {
                           : ""
                       }`}
                     >
-                      ${player.score}
+                      {formatMoney(player.score)}
                     </p>
                   </div>
                 );

@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import type { GameState, Player } from "../types/game";
 import { roundName } from "../lib/rounds";
+import { formatMoney } from "../lib/money";
 
 export default function Host() {
   console.log("Host mounted", new Date().toISOString());
@@ -129,7 +130,7 @@ export default function Host() {
   const currentClue = gameState?.currentQuestion
     ? currentCategory?.questions[gameState.currentQuestion[1]]
     : undefined;
-  const dailyDouble = gameState?.ddWager != null;
+  const ddWager = gameState?.ddWager ?? null;
 
   if (!hostToken) {
     return (
@@ -348,7 +349,7 @@ export default function Host() {
               <div className="bg-gray-800 rounded-lg p-6">
                 <h2 className="text-xl font-semibold text-yellow-400 mb-2">
                   {currentCategory?.title} -{" "}
-                  {dailyDouble ? `Daily Double for $${gameState.ddWager}` : `$${currentClue?.value}`}
+                  {ddWager !== null ? `Daily Double for ${formatMoney(ddWager)}` : `$${currentClue?.value}`}
                 </h2>
                 <p className="text-3xl text-white mb-4">
                   {currentClue?.question}
@@ -358,9 +359,9 @@ export default function Host() {
                     {currentClue?.answer}
                   </span>
                 </p>
-                {dailyDouble ? (
+                {ddWager !== null ? (
                   <p className="text-2xl text-red-400 mb-6">
-                    {playerName(gameState.currentBuzzer)} wagered ${gameState.ddWager}
+                    {playerName(gameState.currentBuzzer)} wagered {formatMoney(ddWager)}
                   </p>
                 ) : (
                   buzzedPlayer && (
@@ -382,7 +383,7 @@ export default function Host() {
                   >
                     Incorrect
                   </button>
-                  {dailyDouble && (
+                  {ddWager !== null && (
                     <button
                       onClick={() => sendMessage({ type: "HostSkip" })}
                       className="px-8 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
@@ -404,9 +405,9 @@ export default function Host() {
                 <p className="text-3xl text-white mb-4">
                   {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
                 </p>
-                {dailyDouble && (
+                {ddWager !== null && (
                   <p className="text-lg text-gray-300 mb-2">
-                    Daily Double: {pickerName} wagered ${gameState.ddWager}
+                    Daily Double: {pickerName} wagered {formatMoney(ddWager)}
                   </p>
                 )}
                 <p className="text-2xl text-green-400 mb-6">
@@ -438,7 +439,7 @@ export default function Host() {
                       <span className="text-white font-semibold">{idx + 1}. {player.name}</span>
                       <span className={`ml-4 ${
                           player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-white"
-                        }`}>${player.score}</span>
+                        }`}>{formatMoney(player.score)}</span>
                     </div>
                   ))}
                 </div>
@@ -459,7 +460,7 @@ export default function Host() {
                     <p className="text-white font-semibold">{player.name}</p>
                     <p className={`text-2xl ${
                         player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-green-400"
-                      }`}>${player.score}</p>
+                      }`}>{formatMoney(player.score)}</p>
                     {player.pid === gameState.picker && (
                       <p className="text-yellow-400 text-xs font-bold uppercase mt-1">Picking</p>
                     )}
