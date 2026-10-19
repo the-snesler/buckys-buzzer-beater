@@ -1,4 +1,4 @@
-import type { GameCategory } from "./gameFile";
+import type { FinalClue, GameCategory } from "./gameFile";
 
 const API_BASE = "/api/v1";
 
@@ -17,6 +17,8 @@ export interface CreateRoomOptions {
    * Jeopardy, in rounds where the game file has none
    */
   randomDailyDoubles?: boolean;
+  /** The Final Jeopardy clue. Null or omitted if the game has none. */
+  final?: FinalClue | null;
 }
 
 export async function createRoom(options: CreateRoomOptions = {}): Promise<CreateRoomResponse> {

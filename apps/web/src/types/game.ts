@@ -10,6 +10,12 @@ export type GamePhase =
   | "answer"
   | "answerReveal"
   | "waitingForBuzz"
+  /** Final Jeopardy: everyone sees the category and wagers */
+  | "finalWager"
+  /** Final Jeopardy: everyone sees the clue and writes a response */
+  | "finalAnswer"
+  /** Final Jeopardy: the host reveals and judges each response in turn */
+  | "finalReveal"
   | "gameEnd";
 
 export interface Question {
@@ -31,6 +37,31 @@ export interface Player {
   buzzed: boolean;
 }
 
+/** One player's Final Jeopardy wager and response */
+export interface FinalEntry {
+  pid: PlayerId;
+  wager: number | null;
+  answer: string | null;
+  /** How the host judged the response, once they have */
+  correct: boolean | null;
+  /** Whether the response has been shown to everyone */
+  revealed: boolean;
+}
+
+/**
+ * Final Jeopardy as the host sees it. The display gets a copy with everything that
+ * hasn't been revealed yet removed, see displayGameState in Host.tsx.
+ */
+export interface FinalState {
+  category: string;
+  question: string;
+  answer: string;
+  /** Every player in Final Jeopardy: by pid until the responses are locked, then in reveal order */
+  entries: FinalEntry[];
+  /** Index into entries of the next response to reveal or judge; entries.length once all are judged */
+  revealIndex: number;
+}
+
 /**
  * The full game state. The server only sends it to the host, which forwards it to the
  * display. Players get PublicState instead, since this contains every answer.
@@ -49,5 +80,9 @@ export interface GameState {
   picker: PlayerId | null;
   /** The picker's wager on the Daily Double being played, once they've made it */
   ddWager: number | null;
+  /** Whether the game ends with Final Jeopardy */
+  hasFinal: boolean;
+  /** Final Jeopardy, from when it starts */
+  final: FinalState | null;
   winner: PlayerId | null;
 }

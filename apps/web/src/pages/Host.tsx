@@ -86,6 +86,8 @@ export default function Host() {
             currentBuzzer: message.currentBuzzer,
             picker: message.picker,
             ddWager: message.ddWager,
+            hasFinal: message.hasFinal,
+            final: message.final,
             winner: message.winner,
           });
           if (message.state !== "selection") {
@@ -110,6 +112,8 @@ export default function Host() {
     const message =
       gameState.round + 1 < gameState.roundCount
         ? `End ${current} now and start ${roundName(gameState.round + 1)}? The clues left on this board will be skipped.`
+        : gameState.hasFinal
+        ? `End ${current} now and start Final Jeopardy!? The clues left on this board will be skipped.`
         : `End ${current} now? This ends the game, and the clues left on the board will be skipped.`;
     if (window.confirm(message)) {
       sendMessage({ type: "HostNextRound", round: gameState.round });
@@ -222,7 +226,9 @@ export default function Host() {
                     onClick={endRound}
                     className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500 text-sm font-semibold"
                   >
-                    {gameState.round + 1 < gameState.roundCount ? "End Round" : "End Game"}
+                    {gameState.round + 1 < gameState.roundCount || gameState.hasFinal
+                      ? "End Round"
+                      : "End Game"}
                   </button>
                 </div>
                 {gameState.picker === null || choosingPicker ? (

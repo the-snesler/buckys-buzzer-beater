@@ -35,10 +35,19 @@ export type GameEvent =
       canBuzz: boolean;
       /** Set while this player must make a wager, which is accepted in this range */
       wagerRange: WagerRange | null;
-      /** This player's wager on the clue being played */
+      /** This player's wager on the clue being played, or on Final Jeopardy */
       wager: number | null;
-      /** What this player is wagering on, such as the Daily Double's category */
+      /**
+       * What this player is wagering or answering on: the Daily Double's category, the
+       * Final Jeopardy category while wagering, or the Final Jeopardy clue after that
+       */
       prompt: string | null;
+      /** Whether this player may write a response to the Final Jeopardy clue now */
+      canAnswer: boolean;
+      /** This player's own Final Jeopardy response, once they've sent one */
+      answer: string | null;
+      /** How the host judged this player's own Final Jeopardy response, once they have */
+      correct: boolean | null;
     }
   // Sent to one player when a command of theirs was refused, such as a wager out of range
   | { type: "Rejected"; reason: string }
@@ -60,5 +69,11 @@ export type GameCommand =
   | { type: "HostNextRound"; round: number }
   | { type: "HostSetPicker"; pid: PlayerId }
   | { type: "SubmitWager"; amount: number }
+  // Can be resent to change the response until the host locks them
+  | { type: "SubmitAnswer"; answer: string }
+  | { type: "HostRevealFinalClue" }
+  | { type: "HostLockFinalAnswers" }
+  // `pid` is the player being revealed, so a repeated click can't reveal the next one
+  | { type: "HostRevealFinalResponse"; pid: PlayerId }
   | { type: "Heartbeat"; hbid: number; tDohbRecv: number }
   | { type: "LatencyOfHeartbeat"; hbid: number; tLat: number };

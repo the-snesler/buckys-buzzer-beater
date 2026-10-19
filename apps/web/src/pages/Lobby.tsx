@@ -100,6 +100,7 @@ export default function Lobby() {
         categories: toServerCategories(game.single),
         doubleCategories: toServerCategories(game.double),
         randomDailyDoubles,
+        final: game.final,
       });
       // Store host token for WebSocket auth
       sessionStorage.setItem(`host_token_${roomCode}`, hostToken);

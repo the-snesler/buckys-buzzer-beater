@@ -128,11 +128,12 @@ export function countDailyDoubles(game: ParsedGame): number {
 
 /**
  * A one-line summary of what the game contains, such as
- * "6 categories + Double Jeopardy, 3 Daily Doubles"
+ * "6 categories + Double Jeopardy + Final Jeopardy, 3 Daily Doubles"
  */
 export function describeGame(game: ParsedGame): string {
   const categories = `${game.single.length} ${game.single.length === 1 ? "category" : "categories"}`;
-  const rounds = game.double.length > 0 ? `${categories} + Double Jeopardy` : categories;
+  const withDouble = game.double.length > 0 ? `${categories} + Double Jeopardy` : categories;
+  const rounds = game.final ? `${withDouble} + Final Jeopardy` : withDouble;
   const dailyDoubles = countDailyDoubles(game);
   if (dailyDoubles === 0) return rounds;
   return `${rounds}, ${dailyDoubles} Daily Double${dailyDoubles === 1 ? "" : "s"}`;
