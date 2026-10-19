@@ -1781,12 +1781,58 @@ mod gameplay_tests {
         }
 
         // Someone joins during the wager, and plays for $1
-        let (mut early_ws, early_id) = add_player(port, &room_code, "Early").await;
-        let msgs = recv_msgs(&mut early_ws).await;
-        assert!(
-            msgs.is_empty(),
-            "add_player already read the join: {msgs:?}"
+        let mut early_ws = connect_ws_client(port, &room_code, "?playerName=Early").await;
+        let mut before_clue = recv_texts(&mut early_ws).await;
+        let msgs = parse_all(&before_clue);
+        let early_id = msgs
+            .iter()
+            .find_map(|m| match m {
+                GameEvent::NewPlayer { pid, .. } => Some(*pid),
+                _ => None,
+            })
+            .expect("Early should be told their pid");
+        assert_eq!(
+            last_final_view(&msgs),
+            Some((
+                None,
+                Some(1),
+                Some(FINAL_CATEGORY.to_string()),
+                false,
+                None,
+                None
+            ))
         );
+
+        // AJ's phone drops while AJ is deciding on a wager, and comes back
+        drop(aj_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut aj_ws = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", aj_token, aj_id),
+        )
+        .await;
+        let texts = recv_texts(&mut aj_ws).await;
+        assert_eq!(
+            last_final_view(&parse_all(&texts)),
+            Some((
+                Some(WagerRange { min: 0, max: 200 }),
+                None,
+                Some(FINAL_CATEGORY.to_string()),
+                false,
+                None,
+                None
+            ))
+        );
+        before_clue.extend(texts);
+        before_clue.extend(recv_texts(&mut sam_ws).await);
+        for text in &before_clue {
+            assert!(
+                !text.contains(FINAL_CLUE),
+                "Clue sent before it was revealed: {text}"
+            );
+        }
+
         let host_msgs = recv_msgs(&mut host_ws).await;
         let final_view = last_host_final(&host_msgs).expect("Host should see the new player");
         assert_eq!(
