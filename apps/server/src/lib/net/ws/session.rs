@@ -113,13 +113,14 @@ fn register_new_player(room: &mut Room, name: String, tx: EventSender) -> Player
     new_id
 }
 
-/// Sends a player their own state and, once the game has started, the public state
+/// Sends a player the public state once the game has started, then their own state. This
+/// is the same order as a broadcast, so the player's own state wins.
 fn send_player_view(room: &Room, pid: PlayerId, tx: &EventSender) {
-    if let Some(player_state) = room.build_player_state_msg(pid) {
-        send_event(tx, player_state);
-    }
     if room.state != GameState::Start {
         send_event(tx, room.build_public_state_msg());
+    }
+    if let Some(player_state) = room.build_player_state_msg(pid) {
+        send_event(tx, player_state);
     }
 }
 
