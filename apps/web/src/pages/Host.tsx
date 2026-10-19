@@ -1,11 +1,15 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useWebSocket } from "../hooks/useWebSocket";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import type { GameState, Player } from "../types/game";
+import type { GameCommand } from "../types/messages";
 import { roundName } from "../lib/rounds";
 import { formatMoney } from "../lib/money";
 import { allJudged, displayGameState } from "../lib/finalJeopardy";
+
+/** How long the Final Jeopardy reveal stepper ignores clicks after each step */
+const STEPPER_PAUSE_MS = 400;
 
 export default function Host() {
   console.log("Host mounted", new Date().toISOString());
@@ -144,6 +148,25 @@ export default function Host() {
   const ddWager = gameState?.ddWager ?? null;
   const final = gameState?.final ?? null;
   const finalCurrent = final?.entries[final.revealIndex] ?? null;
+  const inFinal =
+    gameState?.state === "finalWager" ||
+    gameState?.state === "finalAnswer" ||
+    gameState?.state === "finalReveal";
+
+  // The reveal stepper's buttons change under the host's pointer after each step, so a
+  // double click must not land on the next button: ignore clicks for a moment after one
+  const [stepperPaused, setStepperPaused] = useState(false);
+  const revealIndex = final?.revealIndex;
+  const currentRevealed = finalCurrent?.revealed;
+  // Before paint, so the new buttons are never clickable before the pause starts
+  useLayoutEffect(() => {
+    setStepperPaused(true);
+    const timer = setTimeout(() => setStepperPaused(false), STEPPER_PAUSE_MS);
+    return () => clearTimeout(timer);
+  }, [revealIndex, currentRevealed]);
+  const stepperSend = (command: GameCommand) => {
+    if (!stepperPaused) sendMessage(command);
+  };
 
   const revealFinalClue = () => {
     if (!final) return;
@@ -220,13 +243,19 @@ export default function Host() {
               <p className="text-gray-400 text-sm">
                 State: <span className="text-white font-semibold">{gameState.state}</span>
               </p>
-              {gameState.roundCount > 1 && (
-                <p className="text-yellow-400 font-bold">
-                  {roundName(gameState.round)}
-                  <span className="text-gray-400 font-normal text-sm ml-2">
-                    Round {gameState.round + 1} of {gameState.roundCount}
-                  </span>
-                </p>
+              {inFinal ? (
+                <p className="text-yellow-400 font-bold">Final Jeopardy!</p>
+              ) : gameState.state === "gameEnd" ? (
+                <p className="text-yellow-400 font-bold">Game over</p>
+              ) : (
+                gameState.roundCount > 1 && (
+                  <p className="text-yellow-400 font-bold">
+                    {roundName(gameState.round)}
+                    <span className="text-gray-400 font-normal text-sm ml-2">
+                      Round {gameState.round + 1} of {gameState.roundCount}
+                    </span>
+                  </p>
+                )
               )}
             </div>
 
@@ -574,38 +603,51 @@ export default function Host() {
                     </p>
                     <p className="text-gray-400">Wager</p>
                     <p className="text-2xl text-white mb-6">{formatMoney(finalCurrent.wager ?? 0)}</p>
+                    {/* Reveal keeps its slot once clicked, and the judge buttons get their own
+                        row below it, so a double click on Reveal can't also judge */}
                     {!finalCurrent.revealed ? (
                       <button
                         onClick={() =>
-                          sendMessage({ type: "HostRevealFinalResponse", pid: finalCurrent.pid })
+                          stepperSend({ type: "HostRevealFinalResponse", pid: finalCurrent.pid })
                         }
-                        className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold"
+                        disabled={stepperPaused}
+                        className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold disabled:opacity-60"
                       >
                         Reveal
                       </button>
                     ) : (
-                      <div className="flex gap-4 justify-center">
-                        <button
-                          onClick={() => sendMessage({ type: "HostChecked", correct: true })}
-                          className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 text-lg font-semibold"
-                        >
-                          Correct
-                        </button>
-                        <button
-                          onClick={() => sendMessage({ type: "HostChecked", correct: false })}
-                          className="px-8 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 text-lg font-semibold"
-                        >
-                          Incorrect
-                        </button>
-                      </div>
+                      <p className="px-8 py-3 text-lg font-semibold text-gray-300">
+                        Revealed on the display ✓
+                      </p>
                     )}
+                    <div
+                      className={`flex gap-4 justify-center mt-6 pt-6 border-t border-gray-600 ${
+                        finalCurrent.revealed ? "" : "invisible"
+                      }`}
+                    >
+                      <button
+                        onClick={() => stepperSend({ type: "HostChecked", correct: true })}
+                        disabled={stepperPaused || !finalCurrent.revealed}
+                        className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 text-lg font-semibold disabled:opacity-60"
+                      >
+                        Correct
+                      </button>
+                      <button
+                        onClick={() => stepperSend({ type: "HostChecked", correct: false })}
+                        disabled={stepperPaused || !finalCurrent.revealed}
+                        className="px-8 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 text-lg font-semibold disabled:opacity-60"
+                      >
+                        Incorrect
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <div className="text-center mb-6">
                     <p className="text-xl text-gray-300 mb-4">Every response has been judged.</p>
                     <button
-                      onClick={() => sendMessage({ type: "HostContinue" })}
-                      className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold"
+                      onClick={() => stepperSend({ type: "HostContinue" })}
+                      disabled={stepperPaused}
+                      className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold disabled:opacity-60"
                     >
                       Finish game
                     </button>
@@ -649,6 +691,31 @@ export default function Host() {
                     </div>
                   ))}
                 </div>
+                {final && final.entries.some((entry) => entry.correct !== null) && (
+                  <div className="mt-6 text-left">
+                    <h3 className="text-lg font-semibold text-white mb-1">Final Jeopardy</h3>
+                    <p className="text-gray-400 mb-2">
+                      Answer: <span className="text-yellow-300">{final.answer}</span>
+                    </p>
+                    <ul className="space-y-1">
+                      {final.entries.map((entry) => (
+                        <li key={entry.pid} className="flex justify-between gap-4 rounded bg-gray-700 px-3 py-2">
+                          <span className="text-white">
+                            {playerName(entry.pid) ?? `Player ${entry.pid}`}:{" "}
+                            <span className="text-gray-300 break-words">
+                              {entry.answer ? entry.answer : "(no response)"}
+                            </span>
+                          </span>
+                          <span className="text-gray-300 whitespace-nowrap">
+                            {entry.correct === null
+                              ? "not judged"
+                              : `${entry.correct ? "✓ +" : "✗ -"}${formatMoney(entry.wager ?? 0)}`}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
 
@@ -656,22 +723,26 @@ export default function Host() {
             <div className="bg-gray-800 rounded-lg p-6">
               <h2 className="text-xl font-semibold text-white mb-4">Scores</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {gameState.players.map((player) => (
+                {gameState.players.map((player) => {
+                  const picking =
+                    gameState.state === "selection" && player.pid === gameState.picker;
+                  return (
                   <div
                     key={player.pid}
                     className={`bg-gray-700 rounded p-3 text-center ${
-                      player.pid === gameState.picker ? "ring-2 ring-yellow-400" : ""
+                      picking ? "ring-2 ring-yellow-400" : ""
                     }`}
                   >
                     <p className="text-white font-semibold">{player.name}</p>
                     <p className={`text-2xl ${
                         player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-green-400"
                       }`}>{formatMoney(player.score)}</p>
-                    {player.pid === gameState.picker && (
+                    {picking && (
                       <p className="text-yellow-400 text-xs font-bold uppercase mt-1">Picking</p>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
