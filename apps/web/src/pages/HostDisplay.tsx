@@ -1,8 +1,12 @@
 import { useParams } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import React from "react";
 import { QRCodeSVG } from "qrcode.react";
 import type { GameState, Player } from "../types/game";
+import { roundName } from "../lib/rounds";
+
+/** How long the banner announcing a new round covers the board */
+const ROUND_BANNER_MS = 4000;
 
 interface DisplayMessage {
   gameState: GameState | null;
@@ -18,6 +22,8 @@ export default function HostDisplay() {
     name: string;
   } | null>(null);
   const [playerList, setPlayerList] = useState<Player[]>([]);
+  const [roundBanner, setRoundBanner] = useState<number | null>(null);
+  const lastRoundRef = useRef<number | null>(null);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent<DisplayMessage>) => {
@@ -39,6 +45,19 @@ export default function HostDisplay() {
     window.opener.postMessage({ type: "displayReady" }, "*");
     return () => window.removeEventListener("message", handleMessage);
   }, []);
+
+  // Announce each new round, but not the round in progress when the display opens
+  const round = gameState?.round;
+  useEffect(() => {
+    if (round === undefined) return;
+    const previous = lastRoundRef.current;
+    lastRoundRef.current = round;
+    if (previous === null || round <= previous) return;
+
+    setRoundBanner(round);
+    const timer = setTimeout(() => setRoundBanner(null), ROUND_BANNER_MS);
+    return () => clearTimeout(timer);
+  }, [round]);
 
   // Waiting for connection from host window
   if (!gameState) {
@@ -93,15 +112,38 @@ export default function HostDisplay() {
   return (
     <div className="min-h-screen flex items-stretch pb-24 justify-stretch fancy-bg p-8">
       <div className="m-8 w-full h-full">
+        {/* New round banner */}
+        {gameState.state === "selection" && roundBanner !== null && (
+          <div className="flex flex-col items-center justify-center min-h-[80vh]">
+            <h1
+              className="text-8xl font-black text-white tracking-wide text-center animate-pulse"
+              style={{
+                fontFamily: 'Impact, "Arial Black", sans-serif',
+                textShadow: "6px 6px 0px rgba(0,0,0,0.3)",
+              }}
+            >
+              {roundName(roundBanner).toUpperCase()}
+            </h1>
+          </div>
+        )}
+
         {/* Selection State - Show game board */}
-        {gameState.state === "selection" && (
+        {gameState.state === "selection" && roundBanner === null && (
           <div className="bg-stone-900/90 backdrop-blur-sm rounded-lg p-6 border-4 border-stone-700">
+            {gameState.roundCount > 1 && (
+              <h2
+                className="text-center text-3xl font-black text-white tracking-wide mb-4"
+                style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}
+              >
+                {roundName(gameState.round).toUpperCase()}
+              </h2>
+            )}
             <div
               className="grid gap-4 grid-flow-col "
               style={{
                 gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)`,
                 gridTemplateRows: `repeat(${
-                  gameState.categories[0].questions.length + 1
+                  (gameState.categories[0]?.questions.length ?? 0) + 1
                 }, auto)`,
               }}
             >
