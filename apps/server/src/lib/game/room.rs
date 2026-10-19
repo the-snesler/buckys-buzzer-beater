@@ -1144,6 +1144,7 @@ mod tests {
             && response.messages_to_players.is_empty()
             && response.messages_to_specific.is_empty()
             && response.buzz_window_opened.is_none()
+            && response.witness.is_none()
     }
 
     #[test]
@@ -1380,7 +1381,6 @@ mod tests {
 
             assert_eq!(room.state, tc.initial_state, "{}: state changed", tc.name);
             assert!(is_empty(&response), "{}: response not empty", tc.name);
-            assert!(response.witness.is_none(), "{}: witnessed", tc.name);
             assert_eq!(
                 room.current_question,
                 Some((0, 0)),

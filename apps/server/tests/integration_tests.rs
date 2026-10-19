@@ -241,10 +241,13 @@ mod gameplay_tests {
                 .host_token
                 .clone()
         };
-        let mut _host_ws =
+        let mut host_ws =
             connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
 
-        let (player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+        let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+        let _ = recv_msgs(&mut host_ws).await;
+        start_game(&mut host_ws, &mut [&mut player_ws]).await;
         let player_token = {
             let room_map = state.room_map.lock().await;
             let room = room_map.get(&room_code).expect("Could not find room");
@@ -295,13 +298,20 @@ mod gameplay_tests {
             .any(|m| matches!(m, GameEvent::NewPlayer { .. }));
         assert!(!got_new_player, "Should not get NewPlayer on reconnect");
 
-        let has_state = reconnect_msgs.iter().any(|m| {
+        let has_public_state = reconnect_msgs.iter().any(|m| {
             matches!(
                 m,
-                GameEvent::PlayerState { .. } | GameEvent::PublicState { .. }
+                GameEvent::PublicState {
+                    state: GameState::Selection,
+                    ..
+                }
             )
         });
-        assert!(has_state, "Should receive state on reconnect");
+        assert!(has_public_state, "Should receive PublicState on reconnect");
+        let has_player_state = reconnect_msgs
+            .iter()
+            .any(|m| matches!(m, GameEvent::PlayerState { .. }));
+        assert!(has_player_state, "Should receive PlayerState on reconnect");
 
         if let Some(GameEvent::PlayerState { pid, .. }) = reconnect_msgs
             .iter()
