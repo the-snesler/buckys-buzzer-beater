@@ -1,17 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
 import { createRoom } from '../lib/api';
-import {
-  describeGame,
-  gameFromCategories,
-  parseGameFile,
-  toServerCategories,
-  type ParsedGame,
-} from '../lib/gameFile';
-import type { Category } from '../types/game';
+import { describeGame, parseGameFile, toServerCategories, type ParsedGame } from '../lib/gameFile';
 
-interface LocationState {
-  categories?: Category[];
+/** Set by the Game Builder when it hands over a game */
+export interface LocationState {
+  game?: ParsedGame;
   fromBuilder?: boolean;
 }
 
@@ -28,11 +22,11 @@ export default function Lobby() {
   const [fromBuilder, setFromBuilder] = useState(false);
   const [randomDailyDoubles, setRandomDailyDoubles] = useState(false);
 
-  // Load categories from navigation state (from GameBuilder)
+  // Load the game from navigation state (from GameBuilder)
   useEffect(() => {
     const state = location.state as LocationState | null;
-    if (state?.categories && state?.fromBuilder) {
-      setGame(gameFromCategories(state.categories));
+    if (state?.game && state?.fromBuilder) {
+      setGame(state.game);
       setFromBuilder(true);
       setFileName(null);
       // Clear navigation state to prevent reloading on refresh

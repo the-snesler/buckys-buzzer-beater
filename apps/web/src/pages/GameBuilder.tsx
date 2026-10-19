@@ -1,89 +1,99 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { Category } from '../types/game';
+import {
+  findGameProblems,
+  parseGameFile,
+  toGameFile,
+  type FinalClue,
+  type GameCategory,
+  type GameQuestion,
+  type ParsedGame,
+} from '../lib/gameFile';
+import type { LocationState } from './Lobby';
 
-const DEFAULT_VALUES = [200, 400, 600, 800, 1000];
+type Round = 'single' | 'double';
+type Tab = Round | 'final';
 
-interface Clue {
-  value: number;
-  clue: string;
-  solution: string;
-}
+/** The clue values of a new category in each round */
+const DEFAULT_VALUES: Record<Round, number[]> = {
+  single: [200, 400, 600, 800, 1000],
+  double: [400, 800, 1200, 1600, 2000],
+};
 
-interface GameCategory {
-  title: string;
-  clues: Clue[];
-}
+/** How many Daily Doubles TV hides in each round. More is allowed, just unusual. */
+const TV_DAILY_DOUBLES: Record<Round, number> = { single: 1, double: 2 };
 
-function createEmptyCategory(index: number): GameCategory {
+const ROUND_NAMES: Record<Tab, string> = {
+  single: 'Jeopardy',
+  double: 'Double Jeopardy',
+  final: 'Final Jeopardy',
+};
+
+function createEmptyCategory(round: Round, index: number): GameCategory {
   return {
     title: `Category ${index + 1}`,
-    clues: DEFAULT_VALUES.map((value) => ({
+    questions: DEFAULT_VALUES[round].map((value) => ({
+      question: '',
+      answer: '',
       value,
-      clue: '',
-      solution: '',
+      answered: false,
+      dailyDouble: false,
     })),
   };
 }
 
-function createEmptyGame(): GameCategory[] {
-  return Array.from({ length: 6 }, (_, i) => createEmptyCategory(i));
+function createEmptyRound(round: Round): GameCategory[] {
+  return Array.from({ length: 6 }, (_, i) => createEmptyCategory(round, i));
+}
+
+function countDailyDoubles(categories: GameCategory[]): number {
+  return categories.flatMap((cat) => cat.questions).filter((q) => q.dailyDouble).length;
+}
+
+/** Whether anything has been typed into a round beyond its default category titles */
+function roundHasContent(categories: GameCategory[]): boolean {
+  return categories.some((cat) =>
+    cat.questions.some((q) => q.question.trim() || q.answer.trim() || q.dailyDouble)
+  );
 }
 
 export default function GameBuilder() {
   const navigate = useNavigate();
-  const [categories, setCategories] = useState<GameCategory[]>(createEmptyGame);
+  const [tab, setTab] = useState<Tab>('single');
+  const [single, setSingle] = useState<GameCategory[]>(() => createEmptyRound('single'));
+  /** Null while the game has no Double Jeopardy */
+  const [double, setDouble] = useState<GameCategory[] | null>(null);
+  /** Null while the game has no Final Jeopardy */
+  const [final, setFinal] = useState<FinalClue | null>(null);
 
-  const updateCategoryTitle = (catIndex: number, title: string) => {
-    setCategories((prev) =>
-      prev.map((cat, i) => (i === catIndex ? { ...cat, title } : cat))
-    );
+  const game: ParsedGame = { single, double: double ?? [], final, warnings: [] };
+  const problems = findGameProblems(game);
+  const isValid = problems.length === 0;
+
+  const removeDouble = () => {
+    if (
+      double &&
+      roundHasContent(double) &&
+      !window.confirm('Remove Double Jeopardy and every clue in it?')
+    ) {
+      return;
+    }
+    setDouble(null);
   };
 
-  const updateClue = (
-    catIndex: number,
-    clueIndex: number,
-    field: 'clue' | 'solution',
-    value: string
-  ) => {
-    setCategories((prev) =>
-      prev.map((cat, i) =>
-        i === catIndex
-          ? {
-              ...cat,
-              clues: cat.clues.map((c, j) =>
-                j === clueIndex ? { ...c, [field]: value } : c
-              ),
-            }
-          : cat
-      )
-    );
-  };
-
-  const addCategory = () => {
-    setCategories((prev) => [...prev, createEmptyCategory(prev.length)]);
-  };
-
-  const removeCategory = (index: number) => {
-    if (categories.length <= 1) return;
-    setCategories((prev) => prev.filter((_, i) => i !== index));
+  const removeFinal = () => {
+    if (
+      final &&
+      (final.question.trim() || final.answer.trim()) &&
+      !window.confirm('Remove Final Jeopardy and its clue?')
+    ) {
+      return;
+    }
+    setFinal(null);
   };
 
   const downloadJson = () => {
-    const gameData = {
-      game: {
-        single: categories.map((cat) => ({
-          category: cat.title,
-          clues: cat.clues.map((c) => ({
-            value: c.value,
-            clue: c.clue,
-            solution: c.solution,
-          })),
-        })),
-      },
-    };
-
-    const blob = new Blob([JSON.stringify(gameData, null, 2)], {
+    const blob = new Blob([JSON.stringify(toGameFile(game), null, 2)], {
       type: 'application/json',
     });
     const url = URL.createObjectURL(blob);
@@ -95,29 +105,23 @@ export default function GameBuilder() {
   };
 
   const useGame = () => {
-    const transformed: Category[] = categories.map((cat) => ({
-      title: cat.title,
-      questions: cat.clues.map((c) => ({
-        question: c.clue,
-        answer: c.solution,
-        value: c.value,
-        answered: false,
-      })),
-    }));
-
-    navigate('/', { state: { categories: transformed, fromBuilder: true } });
+    // Read back through the game file format, so the lobby gets exactly what it would
+    // from a downloaded copy of this game
+    const state: LocationState = { game: parseGameFile(toGameFile(game)), fromBuilder: true };
+    navigate('/', { state });
   };
 
-  const isValid = categories.every(
-    (cat) =>
-      cat.title.trim() &&
-      cat.clues.every((c) => c.clue.trim() && c.solution.trim())
-  );
+  const tabStatus = (t: Tab): string | null => {
+    if (t === 'double' && !double) return 'off';
+    if (t === 'final' && !final) return 'off';
+    return null;
+  };
+  const tabHasProblem = (t: Tab) => problems.some((p) => p.round === t);
 
   return (
     <div className="min-h-screen bg-gray-900 py-8 px-4">
       <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
           <h1 className="text-3xl font-bold text-white">Game Builder</h1>
           <div className="flex gap-4">
             <button
@@ -143,75 +147,302 @@ export default function GameBuilder() {
         </div>
 
         {!isValid && (
-          <p className="text-yellow-400 mb-4">
-            Fill in all category titles, clues, and solutions to use this game.
-          </p>
+          <div className="text-yellow-400 mb-4">
+            <p>Fill in every category title, clue, and solution to use this game.</p>
+            <ul className="mt-1 text-sm text-yellow-300/80 list-disc list-inside">
+              {problems.map(({ round, message }) => (
+                <li key={round}>
+                  {ROUND_NAMES[round]}: {message}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
-        <div className="space-y-6">
-          {categories.map((category, catIndex) => (
-            <div
-              key={catIndex}
-              className="bg-gray-800 rounded-lg p-6 border border-gray-700"
+        <div role="tablist" className="flex gap-1 border-b border-gray-700 mb-6">
+          {(['single', 'double', 'final'] as const).map((t) => (
+            <button
+              key={t}
+              role="tab"
+              aria-selected={tab === t}
+              onClick={() => setTab(t)}
+              className={`px-4 py-2 rounded-t font-semibold flex items-center gap-2 ${
+                tab === t
+                  ? 'bg-gray-800 text-white border border-b-0 border-gray-700'
+                  : 'text-gray-400 hover:text-white'
+              }`}
             >
-              <div className="flex items-center gap-4 mb-4">
-                <input
-                  type="text"
-                  value={category.title}
-                  onChange={(e) => updateCategoryTitle(catIndex, e.target.value)}
-                  placeholder="Category Title"
-                  className="flex-1 px-4 py-2 bg-gray-700 text-white rounded text-lg font-semibold"
+              {ROUND_NAMES[t]}
+              {tabStatus(t) && (
+                <span className="text-xs font-normal text-gray-500">({tabStatus(t)})</span>
+              )}
+              {tabHasProblem(t) && (
+                <span
+                  className="w-2 h-2 rounded-full bg-yellow-400"
+                  title="Something here still needs filling in"
                 />
-                <button
-                  onClick={() => removeCategory(catIndex)}
-                  disabled={categories.length <= 1}
-                  className="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Remove
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                {category.clues.map((clue, clueIndex) => (
-                  <div
-                    key={clueIndex}
-                    className="grid grid-cols-[80px_1fr_1fr] gap-3 items-start"
-                  >
-                    <div className="px-3 py-2 bg-yellow-600 text-white rounded text-center font-bold">
-                      ${clue.value}
-                    </div>
-                    <input
-                      type="text"
-                      value={clue.clue}
-                      onChange={(e) =>
-                        updateClue(catIndex, clueIndex, 'clue', e.target.value)
-                      }
-                      placeholder="Enter clue..."
-                      className="px-3 py-2 bg-gray-700 text-white rounded"
-                    />
-                    <input
-                      type="text"
-                      value={clue.solution}
-                      onChange={(e) =>
-                        updateClue(catIndex, clueIndex, 'solution', e.target.value)
-                      }
-                      placeholder="Enter answer..."
-                      className="px-3 py-2 bg-gray-700 text-white rounded"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
+              )}
+            </button>
           ))}
         </div>
 
-        <button
-          onClick={addCategory}
-          className="mt-6 w-full py-3 bg-gray-700 text-white rounded hover:bg-gray-600 border-2 border-dashed border-gray-600"
-        >
-          + Add Category
-        </button>
+        {tab === 'single' && (
+          <RoundEditor round="single" categories={single} onChange={setSingle} />
+        )}
+
+        {tab === 'double' &&
+          (double ? (
+            <>
+              <RoundHeader
+                text="Double Jeopardy is played after Jeopardy, with its own board."
+                removeLabel="Remove Double Jeopardy"
+                onRemove={removeDouble}
+              />
+              <RoundEditor
+                round="double"
+                categories={double}
+                onChange={(update) => setDouble((prev) => prev && update(prev))}
+              />
+            </>
+          ) : (
+            <OptionalRoundOff
+              text="This game has no Double Jeopardy round. It goes straight from Jeopardy to Final Jeopardy, or ends."
+              addLabel="Add Double Jeopardy"
+              onAdd={() => setDouble(createEmptyRound('double'))}
+            />
+          ))}
+
+        {tab === 'final' &&
+          (final ? (
+            <>
+              <RoundHeader
+                text="Everyone wagers on the category, then answers the clue in writing."
+                removeLabel="Remove Final Jeopardy"
+                onRemove={removeFinal}
+              />
+              <FinalEditor final={final} onChange={setFinal} />
+            </>
+          ) : (
+            <OptionalRoundOff
+              text="This game has no Final Jeopardy. It ends after the last round."
+              addLabel="Add Final Jeopardy"
+              onAdd={() => setFinal({ category: '', question: '', answer: '' })}
+            />
+          ))}
       </div>
+    </div>
+  );
+}
+
+function OptionalRoundOff({
+  text,
+  addLabel,
+  onAdd,
+}: {
+  text: string;
+  addLabel: string;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="bg-gray-800 rounded-lg p-8 border border-gray-700 text-center">
+      <p className="text-gray-300 mb-4">{text}</p>
+      <button
+        onClick={onAdd}
+        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+      >
+        + {addLabel}
+      </button>
+    </div>
+  );
+}
+
+function RoundHeader({
+  text,
+  removeLabel,
+  onRemove,
+}: {
+  text: string;
+  removeLabel: string;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+      <p className="text-gray-400">{text}</p>
+      <button
+        onClick={onRemove}
+        className="px-3 py-2 text-red-300 border border-red-700 rounded hover:bg-red-900/40"
+      >
+        {removeLabel}
+      </button>
+    </div>
+  );
+}
+
+function RoundEditor({
+  round,
+  categories,
+  onChange,
+}: {
+  round: Round;
+  categories: GameCategory[];
+  onChange: (update: (prev: GameCategory[]) => GameCategory[]) => void;
+}) {
+  const dailyDoubles = countDailyDoubles(categories);
+  const usual = TV_DAILY_DOUBLES[round];
+
+  const updateCategoryTitle = (catIndex: number, title: string) => {
+    onChange((prev) => prev.map((cat, i) => (i === catIndex ? { ...cat, title } : cat)));
+  };
+
+  const updateClue = (catIndex: number, clueIndex: number, change: Partial<GameQuestion>) => {
+    onChange((prev) =>
+      prev.map((cat, i) =>
+        i === catIndex
+          ? {
+              ...cat,
+              questions: cat.questions.map((q, j) => (j === clueIndex ? { ...q, ...change } : q)),
+            }
+          : cat
+      )
+    );
+  };
+
+  const addCategory = () => {
+    onChange((prev) => [...prev, createEmptyCategory(round, prev.length)]);
+  };
+
+  const removeCategory = (index: number) => {
+    onChange((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
+  };
+
+  return (
+    <>
+      <p className="text-sm text-gray-400 mb-4">
+        {dailyDoubles === 0
+          ? `No Daily Doubles. Tick "Daily Double" on a clue to hide one there, or let the lobby place ${usual} at random.`
+          : `${dailyDoubles} Daily Double${dailyDoubles === 1 ? '' : 's'} in this round.`}
+        {dailyDoubles > usual && (
+          <span className="text-yellow-300/80">
+            {' '}
+            That's more than usual: TV hides {usual} in {ROUND_NAMES[round]}.
+          </span>
+        )}
+      </p>
+
+      <div className="space-y-6">
+        {categories.map((category, catIndex) => (
+          <div key={catIndex} className="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            <div className="flex items-center gap-4 mb-4">
+              <input
+                type="text"
+                value={category.title}
+                onChange={(e) => updateCategoryTitle(catIndex, e.target.value)}
+                placeholder="Category Title"
+                className="flex-1 px-4 py-2 bg-gray-700 text-white rounded text-lg font-semibold"
+              />
+              <button
+                onClick={() => removeCategory(catIndex)}
+                disabled={categories.length <= 1}
+                className="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Remove
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {category.questions.map((clue, clueIndex) => (
+                <div
+                  key={clueIndex}
+                  className="grid grid-cols-[80px_1fr_1fr_auto] gap-3 items-start"
+                >
+                  <div
+                    className={`px-3 py-2 text-white rounded text-center font-bold ${
+                      clue.dailyDouble ? 'bg-blue-600' : 'bg-yellow-600'
+                    }`}
+                  >
+                    ${clue.value}
+                  </div>
+                  <input
+                    type="text"
+                    value={clue.question}
+                    onChange={(e) => updateClue(catIndex, clueIndex, { question: e.target.value })}
+                    placeholder="Enter clue..."
+                    className="px-3 py-2 bg-gray-700 text-white rounded"
+                  />
+                  <input
+                    type="text"
+                    value={clue.answer}
+                    onChange={(e) => updateClue(catIndex, clueIndex, { answer: e.target.value })}
+                    placeholder="Enter answer..."
+                    className="px-3 py-2 bg-gray-700 text-white rounded"
+                  />
+                  <label className="flex items-center gap-2 py-2 text-sm text-gray-300 whitespace-nowrap cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={clue.dailyDouble}
+                      onChange={(e) =>
+                        updateClue(catIndex, clueIndex, { dailyDouble: e.target.checked })
+                      }
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                    Daily Double
+                  </label>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button
+        onClick={addCategory}
+        className="mt-6 w-full py-3 bg-gray-700 text-white rounded hover:bg-gray-600 border-2 border-dashed border-gray-600"
+      >
+        + Add Category
+      </button>
+    </>
+  );
+}
+
+function FinalEditor({
+  final,
+  onChange,
+}: {
+  final: FinalClue;
+  onChange: (final: FinalClue) => void;
+}) {
+  return (
+    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700 space-y-4">
+      <label className="block">
+        <span className="block text-sm text-gray-400 mb-1">Category</span>
+        <input
+          type="text"
+          value={final.category}
+          onChange={(e) => onChange({ ...final, category: e.target.value })}
+          placeholder="Shown while players wager"
+          className="w-full px-4 py-2 bg-gray-700 text-white rounded text-lg font-semibold"
+        />
+      </label>
+      <label className="block">
+        <span className="block text-sm text-gray-400 mb-1">Clue</span>
+        <textarea
+          value={final.question}
+          onChange={(e) => onChange({ ...final, question: e.target.value })}
+          placeholder="Enter clue..."
+          rows={3}
+          className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+        />
+      </label>
+      <label className="block">
+        <span className="block text-sm text-gray-400 mb-1">Solution</span>
+        <input
+          type="text"
+          value={final.answer}
+          onChange={(e) => onChange({ ...final, answer: e.target.value })}
+          placeholder="Enter answer..."
+          className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+        />
+      </label>
     </div>
   );
 }

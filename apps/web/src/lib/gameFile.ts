@@ -1,4 +1,4 @@
-import type { Category, Question } from "../types/game";
+import type { Question } from "../types/game";
 
 /**
  * Parsing and validation of game files:
@@ -87,19 +87,6 @@ export function parseGameFile(json: unknown): ParsedGame {
   }
 
   return { single, double, final, warnings };
-}
-
-/** Builds a game from categories that have no Daily Doubles, such as the Game Builder's */
-export function gameFromCategories(categories: Category[]): ParsedGame {
-  return {
-    single: categories.map((category) => ({
-      title: category.title,
-      questions: category.questions.map((question) => ({ ...question, dailyDouble: false })),
-    })),
-    double: [],
-    final: null,
-    warnings: [],
-  };
 }
 
 /** A clue as it's written in a game file */
