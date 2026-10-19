@@ -41,7 +41,9 @@ pub struct Room {
     pub current_question: Option<(usize, usize)>, // (category_index, question_index)
     pub current_buzzer: Option<PlayerId>,
     /// The player whose turn it is to choose the next clue. The host chooses who picks
-    /// first, so this is `None` until then, and clues can't be chosen without it.
+    /// first, so this is `None` until then, and clues can't be chosen without it. A player
+    /// who disconnects stays in the room, so they stay the picker until the host chooses
+    /// someone else.
     pub picker: Option<PlayerId>,
     /// The picker's wager on the Daily Double being played. Set from their wager until the
     /// host moves on from the clue.
