@@ -140,11 +140,11 @@ export default function HostDisplay() {
                       key={qIdx}
                       className={`w-full py-6 rounded font-bold text-2xl text-center ${
                         question.answered
-                          ? "bg-stone-800 text-stone-600"
+                          ? "bg-stone-800 text-transparent border-2 border-stone-800 select-none"
                           : "bg-red-600 text-white border-2 border-red-600"
                       }`}
                     >
-                      {question.answered ? "" : `$${question.value}`}
+                      ${question.value}
                     </div>
                   ))}
                 </React.Fragment>
