@@ -59,6 +59,16 @@ export default function HostDisplay() {
     return () => clearTimeout(timer);
   }, [round]);
 
+  const playerName = (pid: number | null) =>
+    pid !== null ? gameState?.players.find((p) => p.pid === pid)?.name ?? null : null;
+  const currentCategory = gameState?.currentQuestion
+    ? gameState.categories[gameState.currentQuestion[0]]
+    : undefined;
+  // Nobody buzzes on a Daily Double, so the picker answering it comes from the game state
+  const answeringPid =
+    buzzedPlayer?.pid ?? (gameState?.state === "answer" ? gameState.currentBuzzer : null);
+  const answeringName = buzzedPlayer?.name ?? playerName(answeringPid);
+
   // Waiting for connection from host window
   if (!gameState) {
     return (
@@ -197,6 +207,27 @@ export default function HostDisplay() {
           </div>
         )}
 
+        {/* Daily Double - the clue stays hidden until the picker has wagered */}
+        {gameState.state === "dailyDoubleWager" && (
+          <div className="flex flex-col items-center justify-center min-h-[80vh]">
+            <h1
+              className="text-9xl font-black text-yellow-300 tracking-wide text-center animate-pulse mb-8"
+              style={{
+                fontFamily: 'Impact, "Arial Black", sans-serif',
+                textShadow: "6px 6px 0px rgba(0,0,0,0.4)",
+              }}
+            >
+              DAILY DOUBLE
+            </h1>
+            <p className="text-3xl text-red-200 mb-4">{currentCategory?.title}</p>
+            {playerName(gameState.picker) && (
+              <p className="text-2xl text-white">
+                {playerName(gameState.picker)} is making a wager...
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Waiting for Buzz State */}
         {gameState.state === "waitingForBuzz" && gameState.currentQuestion && (
           <div className="flex flex-col items-center justify-center min-h-[80vh]">
@@ -225,12 +256,14 @@ export default function HostDisplay() {
         {gameState.state === "answer" && gameState.currentQuestion && (
           <div className="flex flex-col items-center justify-center min-h-[80vh]">
             <p className="text-xl text-red-200 mb-4">
-              {gameState.categories[gameState.currentQuestion[0]]?.title} - $
-              {
-                gameState.categories[gameState.currentQuestion[0]]?.questions[
-                  gameState.currentQuestion[1]
-                ]?.value
-              }
+              {gameState.categories[gameState.currentQuestion[0]]?.title} -{" "}
+              {gameState.ddWager !== null
+                ? `Daily Double for $${gameState.ddWager}`
+                : `$${
+                    gameState.categories[gameState.currentQuestion[0]]?.questions[
+                      gameState.currentQuestion[1]
+                    ]?.value
+                  }`}
             </p>
             <p className="text-5xl text-white text-center leading-relaxed mb-8">
               {
@@ -239,10 +272,10 @@ export default function HostDisplay() {
                 ]?.question
               }
             </p>
-            {buzzedPlayer && (
+            {answeringName && (
               <div className="bg-white/95 px-12 py-6 border-4 border-red-700 rounded-2xl shadow-2xl">
                 <p className="text-4xl text-red-900 font-bold">
-                  {buzzedPlayer.name}
+                  {answeringName}
                 </p>
               </div>
             )}
@@ -253,8 +286,10 @@ export default function HostDisplay() {
         {gameState.state === "answerReveal" && gameState.currentQuestion && (
           <div className="flex flex-col items-center justify-center min-h-[80vh]">
             <p className="text-xl text-red-200 mb-4">
-              {gameState.categories[gameState.currentQuestion[0]]?.title} - $
-              {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.value}
+              {gameState.categories[gameState.currentQuestion[0]]?.title} -{" "}
+              {gameState.ddWager !== null
+                ? `Daily Double for $${gameState.ddWager}`
+                : `$${gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.value}`}
             </p>
 
             {/* Show the answer prominently */}
@@ -320,7 +355,7 @@ export default function HostDisplay() {
                   <div
                     key={player.pid}
                     className={`relative px-6 py-3 text-center rounded-lg transition-all duration-300 ${
-                      buzzedPlayer?.pid === player.pid
+                      answeringPid === player.pid
                         ? "bg-white/95 text-red-900 border-4 border-red-700 rounded-lg scale-110"
                         : picking
                         ? "bg-stone-800 text-white border-4 border-yellow-400 rounded-lg scale-110"

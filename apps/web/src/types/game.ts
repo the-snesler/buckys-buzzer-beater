@@ -5,6 +5,8 @@ export type GamePhase =
   | "start"
   | "selection"
   | "questionReading"
+  /** The picker chose a Daily Double and is deciding how much to wager */
+  | "dailyDoubleWager"
   | "answer"
   | "answerReveal"
   | "waitingForBuzz"
@@ -45,5 +47,7 @@ export interface GameState {
   currentBuzzer: PlayerId | null;
   /** The player who chooses the next clue. Null until the host chooses who picks first. */
   picker: PlayerId | null;
+  /** The picker's wager on the Daily Double being played, once they've made it */
+  ddWager: number | null;
   winner: PlayerId | null;
 }

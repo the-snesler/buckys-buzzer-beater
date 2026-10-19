@@ -84,6 +84,7 @@ export default function Host() {
             currentQuestion: message.currentQuestion,
             currentBuzzer: message.currentBuzzer,
             picker: message.picker,
+            ddWager: message.ddWager,
             winner: message.winner,
           });
           if (message.state !== "selection") {
@@ -119,10 +120,16 @@ export default function Host() {
     setChoosingPicker(false);
   };
 
-  const pickerName =
-    gameState?.picker != null
-      ? gameState.players.find((p) => p.pid === gameState.picker)?.name ?? null
-      : null;
+  const playerName = (pid: number | null | undefined) =>
+    pid != null ? gameState?.players.find((p) => p.pid === pid)?.name ?? null : null;
+  const pickerName = playerName(gameState?.picker);
+  const currentCategory = gameState?.currentQuestion
+    ? gameState.categories[gameState.currentQuestion[0]]
+    : undefined;
+  const currentClue = gameState?.currentQuestion
+    ? currentCategory?.questions[gameState.currentQuestion[1]]
+    : undefined;
+  const dailyDouble = gameState?.ddWager != null;
 
   if (!hostToken) {
     return (
@@ -292,6 +299,28 @@ export default function Host() {
               </div>
             )}
 
+            {/* Daily Double - the clue stays hidden until the picker has wagered */}
+            {gameState.state === "dailyDoubleWager" && (
+              <div className="bg-gray-800 rounded-lg p-6 text-center">
+                <h2 className="text-4xl font-black text-yellow-400 mb-2">Daily Double!</h2>
+                <p className="text-xl text-white mb-6">
+                  {currentCategory?.title} - ${currentClue?.value}
+                </p>
+                <p className="text-2xl text-gray-300 animate-pulse mb-2">
+                  Waiting for {pickerName ?? "the picker"} to wager...
+                </p>
+                <p className="text-sm text-gray-400 mb-6">
+                  The clue appears here once the wager is in.
+                </p>
+                <button
+                  onClick={() => sendMessage({ type: "HostSkip" })}
+                  className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
+                >
+                  Skip Daily Double
+                </button>
+              </div>
+            )}
+
             {/* Waiting for Buzz State */}
             {gameState.state === "waitingForBuzz" && gameState.currentQuestion && (
               <div className="bg-gray-800 rounded-lg p-6">
@@ -318,21 +347,27 @@ export default function Host() {
             {gameState.state === "answer" && gameState.currentQuestion && (
               <div className="bg-gray-800 rounded-lg p-6">
                 <h2 className="text-xl font-semibold text-yellow-400 mb-2">
-                  {gameState.categories[gameState.currentQuestion[0]]?.title} - $
-                  {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.value}
+                  {currentCategory?.title} -{" "}
+                  {dailyDouble ? `Daily Double for $${gameState.ddWager}` : `$${currentClue?.value}`}
                 </h2>
                 <p className="text-3xl text-white mb-4">
-                  {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
+                  {currentClue?.question}
                 </p>
                 <p className="text-lg text-gray-400 mb-6">
                   Answer: <span className="text-yellow-300">
-                    {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.answer}
+                    {currentClue?.answer}
                   </span>
                 </p>
-                {buzzedPlayer && (
+                {dailyDouble ? (
                   <p className="text-2xl text-red-400 mb-6">
-                    {buzzedPlayer.name} buzzed in!
+                    {playerName(gameState.currentBuzzer)} wagered ${gameState.ddWager}
                   </p>
+                ) : (
+                  buzzedPlayer && (
+                    <p className="text-2xl text-red-400 mb-6">
+                      {buzzedPlayer.name} buzzed in!
+                    </p>
+                  )
                 )}
                 <div className="flex gap-4 justify-center">
                   <button
@@ -347,6 +382,14 @@ export default function Host() {
                   >
                     Incorrect
                   </button>
+                  {dailyDouble && (
+                    <button
+                      onClick={() => sendMessage({ type: "HostSkip" })}
+                      className="px-8 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
+                    >
+                      Skip
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -361,6 +404,11 @@ export default function Host() {
                 <p className="text-3xl text-white mb-4">
                   {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
                 </p>
+                {dailyDouble && (
+                  <p className="text-lg text-gray-300 mb-2">
+                    Daily Double: {pickerName} wagered ${gameState.ddWager}
+                  </p>
+                )}
                 <p className="text-2xl text-green-400 mb-6">
                   Answer: <span className="text-yellow-300">
                     {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.answer}

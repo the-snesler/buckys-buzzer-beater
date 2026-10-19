@@ -2,6 +2,12 @@ import type { GamePhase, GameState, Player, PlayerId } from "./game";
 
 export type PlayerToken = string;
 
+/** The wagers a player may make, inclusive */
+export interface WagerRange {
+  min: number;
+  max: number;
+}
+
 /**
  * Events sent from the server to clients.
  */
@@ -27,7 +33,15 @@ export type GameEvent =
       buzzed: boolean;
       score: number;
       canBuzz: boolean;
+      /** Set while this player must make a wager, which is accepted in this range */
+      wagerRange: WagerRange | null;
+      /** This player's wager on the clue being played */
+      wager: number | null;
+      /** What this player is wagering on, such as the Daily Double's category */
+      prompt: string | null;
     }
+  // Sent to one player when a command of theirs was refused, such as a wager out of range
+  | { type: "Rejected"; reason: string }
   | { type: "PlayerBuzzed"; pid: PlayerId; name: string };
 
 /**
@@ -45,5 +59,6 @@ export type GameCommand =
   // `round` is the round being ended, so a repeated click can't also end the next one
   | { type: "HostNextRound"; round: number }
   | { type: "HostSetPicker"; pid: PlayerId }
+  | { type: "SubmitWager"; amount: number }
   | { type: "Heartbeat"; hbid: number; tDohbRecv: number }
   | { type: "LatencyOfHeartbeat"; hbid: number; tLat: number };

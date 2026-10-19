@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../hooks/useWebSocket';
 import type { GamePhase } from '../types/game';
+import type { WagerRange } from '../types/messages';
 
 // How long a player is locked out after pressing before the buzzer glows
 const LOCKOUT_MS = 250;
@@ -18,6 +19,13 @@ export default function Player() {
   const [myPid, setMyPid] = useState<number | null>(null);
   const [phase, setPhase] = useState<GamePhase>("start");
   const [picker, setPicker] = useState<number | null>(null);
+  const [wagerRange, setWagerRange] = useState<WagerRange | null>(null);
+  const [wager, setWager] = useState<number | null>(null);
+  const [prompt, setPrompt] = useState<string | null>(null);
+  const [wagerInput, setWagerInput] = useState("");
+  // A wager sent to the server that it hasn't accepted or rejected yet
+  const [pendingWager, setPendingWager] = useState<number | null>(null);
+  const [wagerError, setWagerError] = useState<string | null>(null);
   const enabledAtRef = useRef<number | null>(null);
   const lockedUntilRef = useRef(0);
   const lockoutTimerRef = useRef<number | undefined>(undefined);
@@ -56,12 +64,25 @@ export default function Player() {
           break;
         case "PlayerState":
           setMyPid(message.pid);
+          setWagerRange(message.wagerRange);
+          setWager(message.wager);
+          setPrompt(message.prompt);
+          if (message.wagerRange === null) {
+            // The wager was accepted, or the host moved on
+            setPendingWager(null);
+            setWagerError(null);
+            setWagerInput("");
+          }
           setHasBuzzed(message.buzzed);
           updateCanBuzz(message.canBuzz);
           setScore(message.score);
           if (message.canBuzz || message.score !== 0) {
             setGameStarted(true);
           }
+          break;
+        case "Rejected":
+          setPendingWager(null);
+          setWagerError(message.reason);
           break;
         case "PublicState":
           setPhase(message.state);
@@ -116,6 +137,23 @@ export default function Player() {
   };
 
   const glowing = canBuzz && !hasBuzzed && !lockedOut;
+
+  const submitWager = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!wagerRange) return;
+    const amount = Number(wagerInput);
+    if (wagerInput.trim() === "" || !Number.isInteger(amount)) {
+      setWagerError("Enter a whole number of dollars");
+      return;
+    }
+    if (amount < wagerRange.min || amount > wagerRange.max) {
+      setWagerError(`Your wager must be between $${wagerRange.min} and $${wagerRange.max}`);
+      return;
+    }
+    setWagerError(null);
+    setPendingWager(amount);
+    sendMessage({ type: "SubmitWager", amount });
+  };
 
   return (
     <div className="min-h-[100svh] bg-gray-900 p-4">
@@ -179,40 +217,121 @@ export default function Player() {
           </div>
         )}
 
-        <div className="bg-gray-800 rounded-lg p-6 flex flex-col items-center">
-          {/* Buzz on press rather than release, and keep the button pressable before
-              it glows so early presses trigger the lockout */}
-          <button
-            onPointerDown={(e) => handleBuzz(e.timeStamp)}
-            onKeyDown={(e) => {
-              if ((e.key === " " || e.key === "Enter") && !e.repeat) {
-                e.preventDefault();
-                handleBuzz(e.timeStamp);
-              }
-            }}
-            disabled={hasBuzzed}
-            className={`w-48 h-48 rounded-full text-2xl font-bold transition-all select-none touch-manipulation ${
-              lockedOut
-                ? "bg-gray-700 text-gray-500 scale-95"
+        {phase === "dailyDoubleWager" && wagerRange === null && (
+          <div className="bg-blue-900 rounded-lg p-4 mb-4 text-center">
+            <p className="text-2xl font-black text-yellow-300">Daily Double!</p>
+            <p className="text-gray-200">Waiting for the wager...</p>
+          </div>
+        )}
+
+        {wager !== null && phase === "answer" && (
+          <div className="bg-blue-900 rounded-lg p-4 mb-4 text-center">
+            <p className="text-2xl font-black text-yellow-300">Daily Double!</p>
+            {prompt && <p className="text-gray-200">{prompt}</p>}
+            <p className="text-white text-lg mt-1">
+              You wagered ${wager}. Give the host your answer!
+            </p>
+          </div>
+        )}
+
+        {wagerRange !== null ? (
+          <form onSubmit={submitWager} className="bg-blue-900 rounded-lg p-6 space-y-4">
+            <div className="text-center">
+              <p className="text-3xl font-black text-yellow-300">Daily Double!</p>
+              {prompt && <p className="text-lg text-white mt-1">{prompt}</p>}
+              <p className="text-gray-300 mt-2">
+                Wager between ${wagerRange.min} and ${wagerRange.max}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-3xl font-bold text-white">$</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="off"
+                value={wagerInput}
+                onChange={(e) => {
+                  setWagerInput(e.target.value.replace(/[^0-9]/g, ""));
+                  setWagerError(null);
+                }}
+                disabled={pendingWager !== null}
+                placeholder={String(wagerRange.min)}
+                aria-label="Wager"
+                className="w-full px-4 py-3 rounded-lg bg-white text-gray-900 text-3xl font-bold text-center disabled:opacity-60"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setWagerInput(String(wagerRange.min))}
+                disabled={pendingWager !== null}
+                className="flex-1 py-2 rounded-lg bg-gray-700 text-white font-semibold hover:bg-gray-600 disabled:opacity-60"
+              >
+                ${wagerRange.min} min
+              </button>
+              <button
+                type="button"
+                onClick={() => setWagerInput(String(wagerRange.max))}
+                disabled={pendingWager !== null}
+                className="flex-1 py-2 rounded-lg bg-gray-700 text-white font-semibold hover:bg-gray-600 disabled:opacity-60"
+              >
+                All in (${wagerRange.max})
+              </button>
+            </div>
+            {wagerError && (
+              <p className="text-red-300 font-semibold text-center" role="alert">
+                {wagerError}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={pendingWager !== null || wagerInput === ""}
+              className="w-full py-4 rounded-lg bg-yellow-500 text-gray-900 text-xl font-black hover:bg-yellow-400 disabled:opacity-60"
+            >
+              {pendingWager !== null
+                ? `Submitting $${pendingWager}...`
+                : wagerInput === ""
+                ? "Enter a wager"
+                : `Wager $${wagerInput}`}
+            </button>
+          </form>
+        ) : (
+          <div className="bg-gray-800 rounded-lg p-6 flex flex-col items-center">
+            {/* Buzz on press rather than release, and keep the button pressable before
+                it glows so early presses trigger the lockout */}
+            <button
+              onPointerDown={(e) => handleBuzz(e.timeStamp)}
+              onKeyDown={(e) => {
+                if ((e.key === " " || e.key === "Enter") && !e.repeat) {
+                  e.preventDefault();
+                  handleBuzz(e.timeStamp);
+                }
+              }}
+              disabled={hasBuzzed}
+              className={`w-48 h-48 rounded-full text-2xl font-bold transition-all select-none touch-manipulation ${
+                lockedOut
+                  ? "bg-gray-700 text-gray-500 scale-95"
+                  : glowing
+                  ? "bg-red-600 hover:bg-red-500 active:scale-95 text-white shadow-lg shadow-red-600/50 animate-pulse"
+                  : hasBuzzed
+                  ? "bg-yellow-600 text-white cursor-not-allowed"
+                  : "bg-gray-600 text-gray-400"
+              }`}
+            >
+              {hasBuzzed ? "BUZZED!" : lockedOut ? "TOO EARLY" : "BUZZ"}
+            </button>
+            <p className="text-gray-400 mt-4 text-center">
+              {lockedOut
+                ? "Too early! Wait for the glow."
                 : glowing
-                ? "bg-red-600 hover:bg-red-500 active:scale-95 text-white shadow-lg shadow-red-600/50 animate-pulse"
+                ? "Tap to buzz in!"
                 : hasBuzzed
-                ? "bg-yellow-600 text-white cursor-not-allowed"
-                : "bg-gray-600 text-gray-400"
-            }`}
-          >
-            {hasBuzzed ? "BUZZED!" : lockedOut ? "TOO EARLY" : "BUZZ"}
-          </button>
-          <p className="text-gray-400 mt-4 text-center">
-            {lockedOut
-              ? "Too early! Wait for the glow."
-              : glowing
-              ? "Tap to buzz in!"
-              : hasBuzzed
-              ? "Waiting for result..."
-              : "Waiting for host..."}
-          </p>
-        </div>
+                ? "Waiting for result..."
+                : "Waiting for host..."}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );
