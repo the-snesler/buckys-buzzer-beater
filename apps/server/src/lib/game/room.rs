@@ -720,14 +720,19 @@ impl Room {
         }
     }
 
-    /// The player with the lowest score. Ties go to the player who joined first (the lowest
-    /// pid), so the choice doesn't depend on the order of `players`.
+    /// The connected player with the lowest score, or the lowest scorer of all if nobody
+    /// is connected. Ties go to the player who joined first (the lowest pid), so the choice
+    /// doesn't depend on the order of `players`.
     fn lowest_scorer(&self) -> Option<PlayerId> {
-        self.players
-            .iter()
-            .map(|p| (p.player.score, p.player.pid))
-            .min()
-            .map(|(_, pid)| pid)
+        let lowest = |connected_only: bool| {
+            self.players
+                .iter()
+                .filter(|p| !connected_only || p.is_connected())
+                .map(|p| (p.player.score, p.player.pid))
+                .min()
+                .map(|(_, pid)| pid)
+        };
+        lowest(true).or_else(|| lowest(false))
     }
 
     /// Sends the full game state to the host, the public state to every player, and each
@@ -874,6 +879,21 @@ mod tests {
             ],
         }]);
         room
+    }
+
+    /// Adds a player whose connection stays open while the returned receiver lives. Players
+    /// added by [`add_test_player`] count as disconnected.
+    fn add_connected_player(
+        room: &mut Room,
+        pid: u32,
+        name: &str,
+    ) -> tokio::sync::mpsc::Receiver<GameEvent> {
+        let (tx, rx) = channel(10);
+        room.players.push(PlayerEntry::new(
+            Player::new(pid, name.to_string(), 0, false, PlayerToken::generate()),
+            tx,
+        ));
+        rx
     }
 
     fn add_test_player(room: &mut Room, pid: u32, name: &str) {
@@ -3205,5 +3225,61 @@ mod tests {
             }
         }
         assert!(checked > 0);
+    }
+
+    #[test]
+    fn test_new_round_picker_prefers_connected_players() {
+        struct TestCase {
+            name: &'static str,
+            /// (pid, score, connected) for each player
+            players: Vec<(PlayerId, i32, bool)>,
+            expected_picker: PlayerId,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "A player who left in last place is passed over",
+                players: vec![(1, -500, false), (2, 0, true), (3, 100, true)],
+                expected_picker: 2,
+            },
+            TestCase {
+                name: "A connected player in last place picks",
+                players: vec![(1, 500, false), (2, -100, true), (3, 100, true)],
+                expected_picker: 2,
+            },
+            TestCase {
+                name: "Ties among connected players go to the lowest pid",
+                players: vec![(1, 0, false), (2, 300, true), (3, 300, true)],
+                expected_picker: 2,
+            },
+            TestCase {
+                name: "With nobody connected, the lowest scorer picks anyway",
+                players: vec![(1, 200, false), (2, -100, false), (3, 0, false)],
+                expected_picker: 2,
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = create_two_round_room();
+            let mut receivers = Vec::new();
+            for (pid, score, connected) in &tc.players {
+                if *connected {
+                    receivers.push(add_connected_player(&mut room, *pid, "Connected"));
+                } else {
+                    add_test_player(&mut room, *pid, "Gone");
+                }
+                if let Some(entry) = room.players.last_mut() {
+                    entry.player.score = *score;
+                }
+            }
+            room.state = GameState::Selection;
+            room.picker = Some(3);
+
+            room.handle_command(&GameCommand::HostNextRound { round: 0 }, Sender::Host);
+
+            assert_eq!(room.round_index, 1, "{}: round", tc.name);
+            assert_eq!(room.picker, Some(tc.expected_picker), "{}", tc.name);
+            drop(receivers);
+        }
     }
 }

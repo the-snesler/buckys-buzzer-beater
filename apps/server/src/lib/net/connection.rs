@@ -214,6 +214,12 @@ impl PlayerEntry {
 }
 
 impl PlayerEntry {
+    /// Whether the player's WebSocket is open. Its connection drops the receiving end of
+    /// `sender` when it closes, and reconnecting replaces `sender`.
+    pub fn is_connected(&self) -> bool {
+        !self.sender.is_closed()
+    }
+
     pub fn latency(&self) -> anyhow::Result<u32> {
         let sum: u32 = self.latencies.iter().sum();
         let latencies_len: u32 = self.latencies.len().try_into()?;
