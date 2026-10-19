@@ -201,8 +201,13 @@ export function toServerCategories(categories: GameCategory[]): GameCategory[] {
 }
 
 /** How many Daily Doubles the game file hides across its rounds */
-export function countDailyDoubles(game: ParsedGame): number {
-  return [...game.single, ...game.double]
+export function countDailyDoubles(game: Pick<ParsedGame, "single" | "double">): number {
+  return countRoundDailyDoubles(game.single) + countRoundDailyDoubles(game.double);
+}
+
+/** How many Daily Doubles one round's board hides */
+export function countRoundDailyDoubles(categories: GameCategory[]): number {
+  return categories
     .flatMap((category) => category.questions)
     .filter((question) => question.dailyDouble).length;
 }

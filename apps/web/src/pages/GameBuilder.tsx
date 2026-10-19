@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  countRoundDailyDoubles,
   findGameProblems,
   parseGameFile,
   toGameFile,
   type FinalClue,
   type GameCategory,
   type GameQuestion,
-  type ParsedGame,
 } from '../lib/gameFile';
-import type { LocationState } from './Lobby';
+import type { LobbyLocationState } from '../types/navigation';
 
 type Round = 'single' | 'double';
 type Tab = Round | 'final';
@@ -46,10 +46,6 @@ function createEmptyRound(round: Round): GameCategory[] {
   return Array.from({ length: 6 }, (_, i) => createEmptyCategory(round, i));
 }
 
-function countDailyDoubles(categories: GameCategory[]): number {
-  return categories.flatMap((cat) => cat.questions).filter((q) => q.dailyDouble).length;
-}
-
 /** Whether anything has been typed into a round beyond its default category titles */
 function roundHasContent(categories: GameCategory[]): boolean {
   return categories.some((cat) =>
@@ -66,7 +62,7 @@ export default function GameBuilder() {
   /** Null while the game has no Final Jeopardy */
   const [final, setFinal] = useState<FinalClue | null>(null);
 
-  const game: ParsedGame = { single, double: double ?? [], final, warnings: [] };
+  const game = { single, double: double ?? [], final };
   const problems = findGameProblems(game);
   const isValid = problems.length === 0;
 
@@ -107,7 +103,7 @@ export default function GameBuilder() {
   const useGame = () => {
     // Read back through the game file format, so the lobby gets exactly what it would
     // from a downloaded copy of this game
-    const state: LocationState = { game: parseGameFile(toGameFile(game)), fromBuilder: true };
+    const state: LobbyLocationState = { game: parseGameFile(toGameFile(game)), fromBuilder: true };
     navigate('/', { state });
   };
 
@@ -148,7 +144,7 @@ export default function GameBuilder() {
 
         {!isValid && (
           <div className="text-yellow-400 mb-4">
-            <p>Fill in every category title, clue, and solution to use this game.</p>
+            <p>Before you can use this game:</p>
             <ul className="mt-1 text-sm text-yellow-300/80 list-disc list-inside">
               {problems.map(({ round, message }) => (
                 <li key={round}>
@@ -287,7 +283,7 @@ function RoundEditor({
   categories: GameCategory[];
   onChange: (update: (prev: GameCategory[]) => GameCategory[]) => void;
 }) {
-  const dailyDoubles = countDailyDoubles(categories);
+  const dailyDoubles = countRoundDailyDoubles(categories);
   const usual = TV_DAILY_DOUBLES[round];
 
   const updateCategoryTitle = (catIndex: number, title: string) => {

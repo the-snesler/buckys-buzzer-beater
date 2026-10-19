@@ -2,12 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
 import { createRoom } from '../lib/api';
 import { describeGame, parseGameFile, toServerCategories, type ParsedGame } from '../lib/gameFile';
-
-/** Set by the Game Builder when it hands over a game */
-export interface LocationState {
-  game?: ParsedGame;
-  fromBuilder?: boolean;
-}
+import type { LobbyLocationState } from '../types/navigation';
 
 export default function Lobby() {
   const navigate = useNavigate();
@@ -24,7 +19,7 @@ export default function Lobby() {
 
   // Load the game from navigation state (from GameBuilder)
   useEffect(() => {
-    const state = location.state as LocationState | null;
+    const state = location.state as LobbyLocationState | null;
     if (state?.game && state?.fromBuilder) {
       setGame(state.game);
       setFromBuilder(true);
