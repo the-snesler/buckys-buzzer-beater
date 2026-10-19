@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
 import { createRoom } from '../lib/api';
 import { describeGame, parseGameFile, toServerCategories, type ParsedGame } from '../lib/gameFile';
-import type { LobbyLocationState } from '../types/navigation';
+import { draftHasContent, loadBuilderDraft } from '../lib/builderDraft';
+import type { BuilderLocationState, LobbyLocationState } from '../types/navigation';
 
 export default function Lobby() {
   const navigate = useNavigate();
@@ -70,6 +71,25 @@ export default function Lobby() {
       }
     };
     reader.readAsText(file);
+  };
+
+  // A game from the builder is already its draft. Any other game replaces the draft.
+  const editInBuilder = () => {
+    if (!game) return;
+    if (fromBuilder) {
+      navigate('/create');
+      return;
+    }
+    const draft = loadBuilderDraft();
+    if (
+      draft &&
+      draftHasContent(draft) &&
+      !window.confirm('Replace the game in the Game Builder with this one?')
+    ) {
+      return;
+    }
+    const state: BuilderLocationState = { game };
+    navigate('/create', { state });
   };
 
   const handleJoin = (e: React.FormEvent) => {
@@ -241,6 +261,14 @@ export default function Lobby() {
                   <span className="font-black break-all">
                     {fromBuilder ? "Game Builder" : fileName}
                   </span>
+                  {" "}
+                  <button
+                    type="button"
+                    onClick={editInBuilder}
+                    className="text-green-200 hover:text-white underline decoration-2 underline-offset-2 transition-colors"
+                  >
+                    Edit
+                  </button>
                 </p>
               </div>
             )}

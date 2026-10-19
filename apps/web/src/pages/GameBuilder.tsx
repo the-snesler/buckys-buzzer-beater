@@ -1,5 +1,15 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import {
+  defaultCategoryTitle,
+  draftFromGame,
+  draftHasContent,
+  finalHasContent,
+  loadBuilderDraft,
+  roundHasContent,
+  saveBuilderDraft,
+  type BuilderDraft,
+} from '../lib/builderDraft';
 import {
   countRoundDailyDoubles,
   findGameProblems,
@@ -9,7 +19,7 @@ import {
   type GameCategory,
   type GameQuestion,
 } from '../lib/gameFile';
-import type { LobbyLocationState } from '../types/navigation';
+import type { BuilderLocationState, LobbyLocationState } from '../types/navigation';
 
 type Round = 'single' | 'double';
 type Tab = Round | 'final';
@@ -46,33 +56,53 @@ function createEmptyRound(round: Round): GameCategory[] {
   return Array.from({ length: 6 }, (_, i) => createEmptyCategory(round, i));
 }
 
-/** The title a new category gets, such as "Category 3" */
-function defaultCategoryTitle(index: number): string {
-  return `Category ${index + 1}`;
-}
-
-/** Whether anything in a round has been typed or ticked, including a renamed category */
-function roundHasContent(categories: GameCategory[]): boolean {
-  return categories.some(
-    (cat, i) =>
-      cat.title !== defaultCategoryTitle(i) ||
-      cat.questions.some((q) => q.question.trim() || q.answer.trim() || q.dailyDouble)
-  );
-}
-
-/** Whether anything has been typed into Final Jeopardy */
-function finalHasContent(final: FinalClue): boolean {
-  return Boolean(final.category.trim() || final.question.trim() || final.answer.trim());
+function createEmptyDraft(): BuilderDraft {
+  return { single: createEmptyRound('single'), double: null, final: null };
 }
 
 export default function GameBuilder() {
   const navigate = useNavigate();
+  const location = useLocation();
+  // The game the lobby asked to edit, else the draft saved in this tab, else a new game
+  const [initial] = useState<BuilderDraft>(() => {
+    const requested = (location.state as BuilderLocationState | null)?.game;
+    return requested ? draftFromGame(requested) : loadBuilderDraft() ?? createEmptyDraft();
+  });
   const [tab, setTab] = useState<Tab>('single');
-  const [single, setSingle] = useState<GameCategory[]>(() => createEmptyRound('single'));
+  const [single, setSingle] = useState<GameCategory[]>(initial.single);
   /** Null while the game has no Double Jeopardy */
-  const [double, setDouble] = useState<GameCategory[] | null>(null);
+  const [double, setDouble] = useState<GameCategory[] | null>(initial.double);
   /** Null while the game has no Final Jeopardy */
-  const [final, setFinal] = useState<FinalClue | null>(null);
+  const [final, setFinal] = useState<FinalClue | null>(initial.final);
+
+  // Keep the draft, so leaving the builder, going back or reloading doesn't lose it
+  useEffect(() => {
+    saveBuilderDraft({ single, double, final });
+  }, [single, double, final]);
+
+  // The draft now holds any game the lobby passed in, so a reload shouldn't load it again
+  useEffect(() => {
+    if (location.state) {
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
+
+  const loadDraft = (draft: BuilderDraft) => {
+    setSingle(draft.single);
+    setDouble(draft.double);
+    setFinal(draft.final);
+    setTab('single');
+  };
+
+  const newGame = () => {
+    if (
+      draftHasContent({ single, double, final }) &&
+      !window.confirm('Start a new game? Everything in this one will be cleared.')
+    ) {
+      return;
+    }
+    loadDraft(createEmptyDraft());
+  };
 
   const game = { single, double: double ?? [], final };
   const problems = findGameProblems(game);
@@ -131,12 +161,18 @@ export default function GameBuilder() {
       <div className="max-w-6xl mx-auto">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
           <h1 className="text-3xl font-bold text-white">Game Builder</h1>
-          <div className="flex gap-4">
+          <div className="flex flex-wrap gap-2 sm:gap-4">
             <button
               onClick={() => navigate('/')}
               className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600"
             >
               Back to Lobby
+            </button>
+            <button
+              onClick={newGame}
+              className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600"
+            >
+              New Game
             </button>
             <button
               onClick={downloadJson}
