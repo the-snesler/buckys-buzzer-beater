@@ -2,7 +2,7 @@
 export type GameCommand =
   | { type: "StartGame" }
   | { type: "EndGame" }
-  | { type: "Buzz" }
+  | { type: "Buzz"; reactionMs: number }
   | { type: "HostReady" }
   | {
       type: "HostChoice";
