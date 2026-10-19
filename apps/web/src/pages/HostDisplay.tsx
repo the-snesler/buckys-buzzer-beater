@@ -5,9 +5,44 @@ import { QRCodeSVG } from "qrcode.react";
 import type { GameState, Player } from "../types/game";
 import { roundName } from "../lib/rounds";
 import { formatMoney } from "../lib/money";
+import { allJudged } from "../lib/finalJeopardy";
 
 /** How long the banner announcing a new round covers the board */
 const ROUND_BANNER_MS = 4000;
+
+/**
+ * How long the Final Jeopardy countdown runs. It's only for atmosphere: nothing happens
+ * when it runs out, and the host locks the responses whenever they like.
+ */
+const FINAL_COUNTDOWN_SECONDS = 30;
+
+/** A countdown from FINAL_COUNTDOWN_SECONDS that starts when it's first shown */
+function FinalCountdown() {
+  const [remaining, setRemaining] = useState(FINAL_COUNTDOWN_SECONDS);
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      const next = Math.max(0, FINAL_COUNTDOWN_SECONDS - elapsed);
+      setRemaining(next);
+      if (next === 0) clearInterval(timer);
+    }, 250);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="w-full max-w-3xl">
+      <div className="h-4 rounded-full bg-white/20 overflow-hidden">
+        <div
+          className="h-full bg-yellow-300 transition-all duration-300 ease-linear"
+          style={{ width: `${(remaining / FINAL_COUNTDOWN_SECONDS) * 100}%` }}
+        />
+      </div>
+      <p className="text-4xl font-bold text-white text-center mt-4 tabular-nums">{remaining}</p>
+    </div>
+  );
+}
 
 interface DisplayMessage {
   gameState: GameState | null;
@@ -69,6 +104,8 @@ export default function HostDisplay() {
   const answeringPid =
     buzzedPlayer?.pid ?? (gameState?.state === "answer" ? gameState.currentBuzzer : null);
   const answeringName = buzzedPlayer?.name ?? playerName(answeringPid);
+  // Only what the host has revealed, see displayGameState
+  const final = gameState?.final ?? null;
 
   // Waiting for connection from host window
   if (!gameState) {
@@ -307,12 +344,98 @@ export default function HostDisplay() {
           </div>
         )}
 
+        {/* Final Jeopardy - the host only forwards what has been revealed */}
+        {final && gameState.state === "finalWager" && (
+          <div className="flex flex-col items-center justify-center min-h-[80vh]">
+            <h1
+              className="text-8xl font-black text-white tracking-wide text-center mb-12"
+              style={{
+                fontFamily: 'Impact, "Arial Black", sans-serif',
+                textShadow: "6px 6px 0px rgba(0,0,0,0.3)",
+              }}
+            >
+              FINAL JEOPARDY!
+            </h1>
+            <p className="text-5xl text-yellow-300 font-bold text-center uppercase">
+              {final.category}
+            </p>
+            <p className="text-2xl text-red-200 mt-8">Make your wagers on your phones</p>
+          </div>
+        )}
+
+        {final && gameState.state === "finalAnswer" && (
+          <div className="flex flex-col items-center justify-center min-h-[80vh]">
+            <p className="text-2xl text-red-200 mb-4 uppercase">{final.category}</p>
+            <p className="text-5xl text-white text-center leading-relaxed mb-12">
+              {final.question}
+            </p>
+            <FinalCountdown />
+          </div>
+        )}
+
+        {final && gameState.state === "finalReveal" && (
+          <div className="flex flex-col items-center justify-center min-h-[80vh]">
+            <p className="text-2xl text-red-200 mb-2 uppercase">{final.category}</p>
+            <p className="text-2xl italic text-white text-center mb-8">
+              {final.question}
+            </p>
+            <div className="flex flex-wrap justify-center gap-6 w-full">
+              {final.entries.map((entry, idx) => {
+                const player = gameState.players.find((p) => p.pid === entry.pid);
+                return (
+                  <div
+                    key={entry.pid}
+                    className={`w-72 rounded-2xl p-6 text-center transition-all duration-300 ${
+                      idx === final.revealIndex
+                        ? "bg-white/95 text-red-900 border-4 border-red-700 scale-105"
+                        : "bg-stone-900/90 text-white border-4 border-stone-700"
+                    }`}
+                  >
+                    <p className="text-2xl font-bold mb-4">{player?.name ?? `Player ${entry.pid}`}</p>
+                    <p className="text-3xl font-semibold min-h-[2.5rem] break-words">
+                      {entry.revealed ? entry.answer || "(no response)" : "?"}
+                    </p>
+                    {entry.correct !== null && (
+                      <div className="mt-4">
+                        <p
+                          className={`text-2xl font-black ${
+                            entry.correct ? "text-green-500" : "text-red-500"
+                          }`}
+                        >
+                          {entry.correct ? "✓ +" : "✗ -"}
+                          {formatMoney(entry.wager ?? 0)}
+                        </p>
+                        {player && (
+                          <p className="text-xl mt-1">Score: {formatMoney(player.score)}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {allJudged(final) && final.answer && (
+              <div className="bg-white/20 outline outline-4 outline-white/40 rounded-2xl px-16 py-8 mt-12">
+                <p className="text-xl text-green-100 mb-2">Correct response:</p>
+                <p className="text-5xl text-white font-bold text-center">
+                  {final.answer}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Game End State */}
         {gameState.state === "gameEnd" && (
           <div className="flex flex-col items-center justify-center min-h-[80vh]">
             <h2 className="text-5xl font-bold text-white mb-12">
               Game Over!
             </h2>
+            {final?.answer && (
+              <p className="text-2xl text-red-100 -mt-8 mb-12">
+                Final Jeopardy: {final.answer}
+              </p>
+            )}
             <div className="space-y-4 w-full max-w-2xl">
               {[...gameState.players]
                 .sort((a, b) => b.score - a.score)
