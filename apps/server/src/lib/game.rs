@@ -11,6 +11,10 @@ pub struct Question {
     pub value: u32,
     #[serde(default)]
     pub answered: bool,
+    /// Read from the game file when the room is created, but never sent to anyone, host
+    /// included: Daily Doubles are a surprise until a player chooses one
+    #[serde(default, rename = "dailyDouble", skip_serializing)]
+    pub daily_double: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -97,8 +101,33 @@ pub enum GameState {
     Start,
     Selection,
     QuestionReading,
+    /// The picker chose a Daily Double and is deciding how much to wager
+    DailyDoubleWager,
     Answer,
     AnswerReveal,
     WaitingForBuzz,
     GameEnd,
+}
+
+#[cfg(test)]
+mod test {
+    use super::Question;
+
+    #[test]
+    fn test_daily_double_flag_is_read_but_never_sent() {
+        let flagged: Question = serde_json::from_str(
+            r#"{"question": "Q", "answer": "A", "value": 400, "dailyDouble": true}"#,
+        )
+        .expect("Failed to deserialize a flagged clue");
+        assert!(flagged.daily_double);
+
+        let unflagged: Question =
+            serde_json::from_str(r#"{"question": "Q", "answer": "A", "value": 400}"#)
+                .expect("Failed to deserialize a clue without a flag");
+        assert!(!unflagged.daily_double);
+
+        let json = serde_json::to_string(&flagged).expect("Failed to serialize");
+        assert!(!json.contains("dailyDouble"), "Flag sent: {json}");
+        assert!(!json.contains("daily_double"), "Flag sent: {json}");
+    }
 }

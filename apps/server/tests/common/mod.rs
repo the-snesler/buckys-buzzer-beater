@@ -169,6 +169,7 @@ pub async fn add_room_category(state: &AppState, room_code: &str, question_count
             answer: format!("Answer {}", i + 1),
             value: (i as u32 + 1) * 100,
             answered: false,
+            daily_double: false,
         })
         .collect();
 

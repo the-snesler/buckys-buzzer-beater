@@ -65,6 +65,10 @@ pub enum GameCommand {
     HostSetPicker {
         pid: PlayerId,
     },
+    /// A player's wager on the Daily Double they chose
+    SubmitWager {
+        amount: u32,
+    },
     Heartbeat {
         hbid: u32,
         #[serde(rename = "tDohbRecv")]
@@ -119,7 +123,10 @@ impl GameCommand {
             | Self::HostContinue
             | Self::HostNextRound { .. }
             | Self::HostSetPicker { .. } => true,
-            Self::Buzz { .. } | Self::Heartbeat { .. } | Self::LatencyOfHeartbeat { .. } => false,
+            Self::Buzz { .. }
+            | Self::SubmitWager { .. }
+            | Self::Heartbeat { .. }
+            | Self::LatencyOfHeartbeat { .. } => false,
         }
     }
 
@@ -136,6 +143,7 @@ impl GameCommand {
             Self::HostContinue => "HostContinue",
             Self::HostNextRound { .. } => "HostNextRound",
             Self::HostSetPicker { .. } => "HostSetPicker",
+            Self::SubmitWager { .. } => "SubmitWager",
             Self::Heartbeat { .. } => "Heartbeat",
             Self::LatencyOfHeartbeat { .. } => "LatencyOfHeartbeat",
         }
@@ -157,6 +165,19 @@ pub enum Sender {
     Player(PlayerId),
 }
 
+/// The wagers a player may make, inclusive
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WagerRange {
+    pub min: u32,
+    pub max: u32,
+}
+
+impl WagerRange {
+    pub fn contains(&self, amount: u32) -> bool {
+        (self.min..=self.max).contains(&amount)
+    }
+}
+
 /// Events sent from server to clients.
 ///
 /// # Examples
@@ -170,6 +191,9 @@ pub enum Sender {
 ///     buzzed: false,
 ///     score: 500,
 ///     can_buzz: true,
+///     wager_range: None,
+///     wager: None,
+///     prompt: None,
 /// };
 /// let json = serde_json::to_string(&event).unwrap();
 /// assert!(json.contains("PlayerState"));
@@ -211,6 +235,9 @@ pub enum GameEvent {
         current_buzzer: Option<PlayerId>,
         /// The player whose turn it is to choose the next clue, if the host has chosen one
         picker: Option<PlayerId>,
+        /// The picker's wager on the Daily Double being played, once they've made it
+        #[serde(rename = "ddWager")]
+        dd_wager: Option<u32>,
         winner: Option<PlayerId>,
     },
     /// The part of the game state every player may see. Players receive this instead of
@@ -229,6 +256,18 @@ pub enum GameEvent {
         score: i32,
         #[serde(rename = "canBuzz")]
         can_buzz: bool,
+        /// Set while this player must make a wager, which is then accepted in this range
+        #[serde(rename = "wagerRange")]
+        wager_range: Option<WagerRange>,
+        /// This player's wager on the clue being played
+        wager: Option<u32>,
+        /// What this player is wagering or answering on, such as the Daily Double's category
+        prompt: Option<String>,
+    },
+    /// Sent to one player when a command of theirs was refused, such as a wager out of
+    /// range, so they can be told why
+    Rejected {
+        reason: String,
     },
     PlayerBuzzed {
         pid: PlayerId,
@@ -240,7 +279,7 @@ pub enum GameEvent {
 mod test {
     use crate::{
         Player,
-        api::messages::{GameCommand, GameEvent, Sender},
+        api::messages::{GameCommand, GameEvent, Sender, WagerRange},
         game::GameState,
         net::connection::PlayerToken,
     };
@@ -293,6 +332,11 @@ mod test {
                 name: "HostSetPicker",
                 json: r#"{"type": "HostSetPicker", "pid": 2}"#,
                 expected: GameCommand::HostSetPicker { pid: 2 },
+            },
+            TestCase {
+                name: "SubmitWager",
+                json: r#"{"type": "SubmitWager", "amount": 1500}"#,
+                expected: GameCommand::SubmitWager { amount: 1500 },
             },
             TestCase {
                 name: "HostChoice",
@@ -368,6 +412,18 @@ mod test {
                 json: r#"{"type": "HostSetPicker"}"#,
             },
             TestCase {
+                name: "SubmitWager without an amount",
+                json: r#"{"type": "SubmitWager"}"#,
+            },
+            TestCase {
+                name: "SubmitWager with a negative amount",
+                json: r#"{"type": "SubmitWager", "amount": -5}"#,
+            },
+            TestCase {
+                name: "SubmitWager with a fractional amount",
+                json: r#"{"type": "SubmitWager", "amount": 5.5}"#,
+            },
+            TestCase {
                 name: "Empty JSON",
                 json: r#"{}"#,
             },
@@ -416,6 +472,7 @@ mod test {
                     current_question: None,
                     current_buzzer: None,
                     picker: Some(3),
+                    dd_wager: Some(1200),
                     winner: None,
                 },
                 expected_substrings: vec![
@@ -425,6 +482,7 @@ mod test {
                     r#""round":1"#,
                     r#""roundCount":2"#,
                     r#""picker":3"#,
+                    r#""ddWager":1200"#,
                 ],
             },
             TestCase {
@@ -434,6 +492,9 @@ mod test {
                     buzzed: true,
                     score: 500,
                     can_buzz: false,
+                    wager_range: None,
+                    wager: None,
+                    prompt: None,
                 },
                 expected_substrings: vec![
                     r#""type":"PlayerState""#,
@@ -441,7 +502,34 @@ mod test {
                     r#""buzzed":true"#,
                     r#""score":500"#,
                     r#""canBuzz":false"#,
+                    r#""wagerRange":null"#,
+                    r#""wager":null"#,
+                    r#""prompt":null"#,
                 ],
+            },
+            TestCase {
+                name: "PlayerState making a wager",
+                event: GameEvent::PlayerState {
+                    pid: 1,
+                    buzzed: false,
+                    score: 500,
+                    can_buzz: false,
+                    wager_range: Some(WagerRange { min: 5, max: 1000 }),
+                    wager: Some(600),
+                    prompt: Some("Potent Potables".to_string()),
+                },
+                expected_substrings: vec![
+                    r#""wagerRange":{"min":5,"max":1000}"#,
+                    r#""wager":600"#,
+                    r#""prompt":"Potent Potables""#,
+                ],
+            },
+            TestCase {
+                name: "Rejected",
+                event: GameEvent::Rejected {
+                    reason: "Too much".to_string(),
+                },
+                expected_substrings: vec![r#""type":"Rejected""#, r#""reason":"Too much""#],
             },
             TestCase {
                 name: "PublicState",
@@ -548,6 +636,21 @@ mod test {
                 buzzed: false,
                 score: -200,
                 can_buzz: true,
+                wager_range: None,
+                wager: None,
+                prompt: None,
+            },
+            GameEvent::PlayerState {
+                pid: 2,
+                buzzed: false,
+                score: 300,
+                can_buzz: false,
+                wager_range: Some(WagerRange { min: 5, max: 1000 }),
+                wager: Some(5),
+                prompt: Some("Rivers".to_string()),
+            },
+            GameEvent::Rejected {
+                reason: "Wager at least $5".to_string(),
             },
         ];
 
@@ -640,6 +743,11 @@ mod test {
                 should_witness: false,
             },
             TestCase {
+                name: "SubmitWager",
+                command: GameCommand::SubmitWager { amount: 5 },
+                should_witness: false,
+            },
+            TestCase {
                 name: "Heartbeat",
                 command: GameCommand::Heartbeat {
                     hbid: 1,
@@ -726,6 +834,11 @@ mod test {
             TestCase {
                 name: "Buzz",
                 command: GameCommand::Buzz { reaction_ms: 120 },
+                host_command: false,
+            },
+            TestCase {
+                name: "SubmitWager",
+                command: GameCommand::SubmitWager { amount: 5 },
                 host_command: false,
             },
             TestCase {
