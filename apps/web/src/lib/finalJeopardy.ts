@@ -11,8 +11,10 @@ export function allJudged(final: FinalState): boolean {
  * The server sends the host everything about Final Jeopardy, since the host reads the
  * clue, judges the responses and may peek at the wagers. The display is shown to the
  * players, so before forwarding the game state to it, this removes:
- * - the clue, until the host reveals it
- * - the correct response, until every response has been judged
+ * - the clue, until the host reveals it, and after a game that ended before the reveal
+ *   was finished
+ * - the correct response, until every response has been judged, even once the game is
+ *   over, since a game ended early may have a clue nobody saw
  * - each player's response, until the host reveals it
  * - each player's wager, until their response has been judged
  */
@@ -20,13 +22,18 @@ export function displayGameState(gameState: GameState | null): GameState | null 
   const final = gameState?.final;
   if (!gameState || !final) return gameState;
 
+  const finished = allJudged(final);
+  const showQuestion =
+    gameState.state === "finalAnswer" ||
+    gameState.state === "finalReveal" ||
+    (gameState.state === "gameEnd" && finished);
   const showAnswer =
-    gameState.state === "gameEnd" || (gameState.state === "finalReveal" && allJudged(final));
+    (gameState.state === "finalReveal" || gameState.state === "gameEnd") && finished;
   return {
     ...gameState,
     final: {
       category: final.category,
-      question: gameState.state === "finalWager" ? "" : final.question,
+      question: showQuestion ? final.question : "",
       answer: showAnswer ? final.answer : "",
       entries: final.entries.map((entry) => ({
         pid: entry.pid,
