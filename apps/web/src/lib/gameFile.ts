@@ -102,6 +102,100 @@ export function gameFromCategories(categories: Category[]): ParsedGame {
   };
 }
 
+/** A clue as it's written in a game file */
+export interface GameFileClue {
+  value: number;
+  clue: string;
+  solution: string;
+  dailyDouble?: boolean;
+}
+
+export interface GameFileCategory {
+  category: string;
+  clues: GameFileClue[];
+}
+
+/** The JSON of a game file, in the format described at the top of this file */
+export interface GameFile {
+  game: {
+    single: GameFileCategory[];
+    double?: GameFileCategory[];
+    final?: { category: string; clue: string; solution: string };
+  };
+}
+
+/**
+ * Writes a game as a game file, which parseGameFile reads back as the same game. A game
+ * without Double Jeopardy or Final Jeopardy leaves that section out, and only clues that
+ * hide a Daily Double say so.
+ */
+export function toGameFile(game: Pick<ParsedGame, "single" | "double" | "final">): GameFile {
+  const toFileRound = (categories: GameCategory[]): GameFileCategory[] =>
+    categories.map((category) => ({
+      category: category.title,
+      clues: category.questions.map(({ question, answer, value, dailyDouble }) => ({
+        value,
+        clue: question,
+        solution: answer,
+        ...(dailyDouble ? { dailyDouble: true } : {}),
+      })),
+    }));
+
+  return {
+    game: {
+      single: toFileRound(game.single),
+      ...(game.double.length > 0 ? { double: toFileRound(game.double) } : {}),
+      ...(game.final
+        ? {
+            final: {
+              category: game.final.category,
+              clue: game.final.question,
+              solution: game.final.answer,
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+/** Something that stops one round of a game from being played */
+export interface GameProblem {
+  round: "single" | "double" | "final";
+  /** Such as "Category 2, clue 3 has no solution" */
+  message: string;
+}
+
+/**
+ * What stops a game from being played with every round it has: at most one problem per
+ * round.
+ *
+ * Unlike parseGameFile, which leaves out a broken Double Jeopardy or Final Jeopardy so a
+ * scraped game still loads, this counts them as problems. It's for the Game Builder,
+ * whose author added those rounds on purpose.
+ */
+export function findGameProblems(
+  game: Pick<ParsedGame, "single" | "double" | "final">
+): GameProblem[] {
+  const { single, double, final } = toGameFile(game).game;
+  const problems: GameProblem[] = [];
+  const check = (round: GameProblem["round"], parse: () => unknown) => {
+    try {
+      parse();
+    } catch (err) {
+      if (!(err instanceof GameFileError)) throw err;
+      problems.push({ round, message: err.message });
+    }
+  };
+
+  check("single", () => {
+    if (single.length === 0) throw new GameFileError("it has no categories");
+    parseRound(single);
+  });
+  if (double) check("double", () => parseRound(double));
+  if (final) check("final", () => parseFinalClue(final));
+  return problems;
+}
+
 /**
  * The categories of a round, as sent to the server. The server keeps the Daily Double
  * flags to itself, so they never come back in the game state.
@@ -202,12 +296,23 @@ function parseFinal(final: unknown): FinalClue | null {
   if (final === undefined || final === null) {
     return null;
   }
+  // A Final Jeopardy without a clue means the game has none
+  if (
+    isObject(final) &&
+    (final.clue === undefined || (typeof final.clue === "string" && final.clue.trim() === ""))
+  ) {
+    return null;
+  }
+  return parseFinalClue(final);
+}
+
+/** Parses a Final Jeopardy that must have a clue */
+function parseFinalClue(final: unknown): FinalClue {
   if (!isObject(final)) {
     throw new GameFileError('"game.final" is not an object');
   }
-  // A Final Jeopardy without a clue means the game has none
   if (final.clue === undefined || (typeof final.clue === "string" && final.clue.trim() === "")) {
-    return null;
+    throw new GameFileError("it has no clue");
   }
   if (!isNonEmptyString(final.clue)) {
     throw new GameFileError("the clue is not text");
