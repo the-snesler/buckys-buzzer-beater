@@ -188,7 +188,7 @@ impl Room {
             tracing::warn!(
                 room_code = %self.code,
                 ?sender,
-                ?cmd,
+                command = cmd.name(),
                 "Ignoring command not allowed from this sender"
             );
             return RoomResponse::new();
@@ -197,7 +197,7 @@ impl Room {
             tracing::info!(
                 room_code = %self.code,
                 ?sender,
-                ?cmd,
+                command = cmd.name(),
                 state = ?self.state,
                 "Ignoring command not allowed in the current state"
             );

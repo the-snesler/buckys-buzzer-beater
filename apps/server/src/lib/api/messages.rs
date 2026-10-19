@@ -111,6 +111,22 @@ impl GameCommand {
         }
     }
 
+    /// The command's `type` tag, for logging without the client-controlled payload
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::StartGame => "StartGame",
+            Self::EndGame => "EndGame",
+            Self::Buzz { .. } => "Buzz",
+            Self::HostReady => "HostReady",
+            Self::HostChoice { .. } => "HostChoice",
+            Self::HostChecked { .. } => "HostChecked",
+            Self::HostSkip => "HostSkip",
+            Self::HostContinue => "HostContinue",
+            Self::Heartbeat { .. } => "Heartbeat",
+            Self::LatencyOfHeartbeat { .. } => "LatencyOfHeartbeat",
+        }
+    }
+
     /// Whether `sender`'s role is allowed to send this command
     pub fn allowed_from(&self, sender: Sender) -> bool {
         match sender {
@@ -659,6 +675,8 @@ mod test {
         ];
 
         for tc in test_cases {
+            let json = serde_json::to_value(&tc.command).expect("Failed to serialize");
+            assert_eq!(json["type"], tc.command.name(), "{}: wrong name", tc.name);
             assert_eq!(
                 tc.command.is_host_command(),
                 tc.host_command,
