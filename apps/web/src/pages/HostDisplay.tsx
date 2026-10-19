@@ -139,22 +139,28 @@ export default function HostDisplay() {
               </h2>
             )}
             <div
-              className="grid gap-4 grid-flow-col "
+              className="grid gap-4"
               style={{
                 gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)`,
+                // Categories can have different numbers of clues, so size the board for the
+                // longest one and place every cell explicitly
                 gridTemplateRows: `repeat(${
-                  (gameState.categories[0]?.questions.length ?? 0) + 1
+                  Math.max(0, ...gameState.categories.map((c) => c.questions.length)) + 1
                 }, auto)`,
               }}
             >
               {gameState.categories.map((category, catIdx) => (
                 <React.Fragment key={catIdx}>
-                  <h3 className="text-center text-white font-bold text-lg uppercase py-4 bg-red-900/80 rounded">
+                  <h3
+                    className="text-center text-white font-bold text-lg uppercase py-4 bg-red-900/80 rounded"
+                    style={{ gridColumn: catIdx + 1, gridRow: 1 }}
+                  >
                     {category.title}
                   </h3>
                   {category.questions.map((question, qIdx) => (
                     <div
                       key={qIdx}
+                      style={{ gridColumn: catIdx + 1, gridRow: qIdx + 2 }}
                       className={`w-full py-6 rounded font-bold text-2xl text-center ${
                         question.answered
                           ? "bg-stone-800 text-stone-600"
