@@ -31,7 +31,7 @@ const ROUND_NAMES: Record<Tab, string> = {
 
 function createEmptyCategory(round: Round, index: number): GameCategory {
   return {
-    title: `Category ${index + 1}`,
+    title: defaultCategoryTitle(index),
     questions: DEFAULT_VALUES[round].map((value) => ({
       question: '',
       answer: '',
@@ -46,11 +46,23 @@ function createEmptyRound(round: Round): GameCategory[] {
   return Array.from({ length: 6 }, (_, i) => createEmptyCategory(round, i));
 }
 
-/** Whether anything has been typed into a round beyond its default category titles */
+/** The title a new category gets, such as "Category 3" */
+function defaultCategoryTitle(index: number): string {
+  return `Category ${index + 1}`;
+}
+
+/** Whether anything in a round has been typed or ticked, including a renamed category */
 function roundHasContent(categories: GameCategory[]): boolean {
-  return categories.some((cat) =>
-    cat.questions.some((q) => q.question.trim() || q.answer.trim() || q.dailyDouble)
+  return categories.some(
+    (cat, i) =>
+      cat.title !== defaultCategoryTitle(i) ||
+      cat.questions.some((q) => q.question.trim() || q.answer.trim() || q.dailyDouble)
   );
+}
+
+/** Whether anything has been typed into Final Jeopardy */
+function finalHasContent(final: FinalClue): boolean {
+  return Boolean(final.category.trim() || final.question.trim() || final.answer.trim());
 }
 
 export default function GameBuilder() {
@@ -80,7 +92,7 @@ export default function GameBuilder() {
   const removeFinal = () => {
     if (
       final &&
-      (final.question.trim() || final.answer.trim()) &&
+      finalHasContent(final) &&
       !window.confirm('Remove Final Jeopardy and its clue?')
     ) {
       return;
