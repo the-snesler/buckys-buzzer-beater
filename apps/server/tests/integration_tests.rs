@@ -1215,6 +1215,141 @@ mod gameplay_tests {
         }
     }
 
+    /// The wager fields of the last PlayerState in `msgs`
+    fn last_wager_view(
+        msgs: &[GameEvent],
+    ) -> Option<(Option<WagerRange>, Option<u32>, Option<String>)> {
+        msgs.iter().rev().find_map(|m| match m {
+            GameEvent::PlayerState {
+                wager_range,
+                wager,
+                prompt,
+                ..
+            } => Some((*wager_range, *wager, prompt.clone())),
+            _ => None,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_daily_double_survives_reconnects_and_late_joins() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [{"title": "Single", "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": 200, "dailyDouble": true},
+                    {"question": "Question 2", "answer": "Answer 2", "value": 400},
+                ]}],
+            }),
+        )
+        .await;
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        // Everything sent on connecting, which is where a flag would most likely leak
+        let mut join_texts = recv_texts(&mut host_ws).await;
+
+        let mut aj_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
+        join_texts.extend(recv_texts(&mut aj_ws).await);
+        let (mut sam_ws, _sam_id) = add_player(port, &room_code, "Sam").await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let (aj_id, aj_token) = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            let aj = &room.players[0].player;
+            (aj.pid, aj.token.clone())
+        };
+
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
+        let _ = recv_msgs(&mut aj_ws).await;
+        send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 0,
+            },
+        )
+        .await;
+        let _ = recv_msgs(&mut sam_ws).await;
+
+        // AJ's phone drops while AJ is deciding on a wager, and comes back
+        drop(aj_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut aj_ws = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", aj_token, aj_id),
+        )
+        .await;
+        let texts = recv_texts(&mut aj_ws).await;
+        let msgs = parse_all(&texts);
+        assert_eq!(
+            last_public_state(&msgs),
+            Some((GameState::DailyDoubleWager, 0, Some(aj_id)))
+        );
+        assert_eq!(
+            last_wager_view(&msgs),
+            Some((
+                Some(WagerRange { min: 5, max: 400 }),
+                None,
+                Some("Single".to_string())
+            )),
+            "The reconnected picker should be asked to wager again"
+        );
+        join_texts.extend(texts);
+
+        // Someone joins in the middle of the Daily Double, and isn't told about it
+        let mut late_ws = connect_ws_client(port, &room_code, "?playerName=Late").await;
+        let texts = recv_texts(&mut late_ws).await;
+        let msgs = parse_all(&texts);
+        assert_eq!(
+            last_public_state(&msgs),
+            Some((GameState::DailyDoubleWager, 0, Some(aj_id)))
+        );
+        assert_eq!(last_wager_view(&msgs), Some((None, None, None)));
+        join_texts.extend(texts);
+        join_texts.extend(recv_texts(&mut host_ws).await);
+
+        // The host reconnects in the middle of the Daily Double
+        drop(host_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let texts = recv_texts(&mut host_ws).await;
+        assert_eq!(
+            last_game_state(&parse_all(&texts)),
+            Some((GameState::DailyDoubleWager, None, Some(aj_id), None))
+        );
+        join_texts.extend(texts);
+
+        for text in &join_texts {
+            assert!(!text.contains(r#""dailyDouble""#), "Flag sent: {text}");
+        }
+
+        // The reconnected picker's wager still works
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 300 }).await;
+        let host_msgs = recv_msgs(&mut host_ws).await;
+        assert_eq!(
+            last_game_state(&host_msgs),
+            Some((GameState::Answer, Some(aj_id), Some(aj_id), Some(300)))
+        );
+        assert_eq!(
+            last_wager_view(&recv_msgs(&mut aj_ws).await),
+            Some((None, Some(300), Some("Single".to_string())))
+        );
+        assert_eq!(
+            last_wager_view(&recv_msgs(&mut late_ws).await),
+            Some((None, None, None))
+        );
+    }
+
     #[tokio::test]
     async fn test_random_daily_doubles() {
         let (_server, port, state) = start_test_server().await;
