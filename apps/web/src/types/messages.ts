@@ -42,6 +42,7 @@ export type GameCommand =
   | { type: "HostChecked"; correct: boolean }
   | { type: "HostSkip" }
   | { type: "HostContinue" }
-  | { type: "HostNextRound" }
+  // `round` is the round being ended, so a repeated click can't also end the next one
+  | { type: "HostNextRound"; round: number }
   | { type: "Heartbeat"; hbid: number; tDohbRecv: number }
   | { type: "LatencyOfHeartbeat"; hbid: number; tLat: number };

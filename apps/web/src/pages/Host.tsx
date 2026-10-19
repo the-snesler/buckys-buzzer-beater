@@ -105,7 +105,7 @@ export default function Host() {
         ? `End ${current} now and start ${roundName(gameState.round + 1)}? The clues left on this board will be skipped.`
         : `End ${current} now? This ends the game, and the clues left on the board will be skipped.`;
     if (window.confirm(message)) {
-      sendMessage({ type: "HostNextRound" });
+      sendMessage({ type: "HostNextRound", round: gameState.round });
     }
   };
 

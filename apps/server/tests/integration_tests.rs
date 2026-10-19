@@ -928,7 +928,8 @@ mod gameplay_tests {
         }
 
         // The host ends Double Jeopardy with a clue left, which ends the game
-        let host_msgs = send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostNextRound).await;
+        let host_msgs =
+            send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostNextRound { round: 1 }).await;
         let game_state = host_msgs
             .iter()
             .find_map(|m| match m {

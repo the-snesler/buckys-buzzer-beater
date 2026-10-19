@@ -56,7 +56,11 @@ pub enum GameCommand {
     HostSkip,
     HostContinue,
     /// Ends the current round early, moving on to the next round or ending the game
-    HostNextRound,
+    HostNextRound {
+        /// The round the host is ending. Ignored unless it is the current round, so a
+        /// repeated click can't skip the next round too.
+        round: usize,
+    },
     Heartbeat {
         hbid: u32,
         #[serde(rename = "tDohbRecv")]
@@ -109,7 +113,7 @@ impl GameCommand {
             | Self::HostChecked { .. }
             | Self::HostSkip
             | Self::HostContinue
-            | Self::HostNextRound => true,
+            | Self::HostNextRound { .. } => true,
             Self::Buzz { .. } | Self::Heartbeat { .. } | Self::LatencyOfHeartbeat { .. } => false,
         }
     }
@@ -125,7 +129,7 @@ impl GameCommand {
             Self::HostChecked { .. } => "HostChecked",
             Self::HostSkip => "HostSkip",
             Self::HostContinue => "HostContinue",
-            Self::HostNextRound => "HostNextRound",
+            Self::HostNextRound { .. } => "HostNextRound",
             Self::Heartbeat { .. } => "Heartbeat",
             Self::LatencyOfHeartbeat { .. } => "LatencyOfHeartbeat",
         }
@@ -274,8 +278,8 @@ mod test {
             },
             TestCase {
                 name: "HostNextRound",
-                json: r#"{"type": "HostNextRound"}"#,
-                expected: GameCommand::HostNextRound,
+                json: r#"{"type": "HostNextRound", "round": 1}"#,
+                expected: GameCommand::HostNextRound { round: 1 },
             },
             TestCase {
                 name: "HostChoice",
@@ -341,6 +345,10 @@ mod test {
             TestCase {
                 name: "Missing required field",
                 json: r#"{"type": "HostChoice", "categoryIndex: 2"}"#,
+            },
+            TestCase {
+                name: "HostNextRound without a round",
+                json: r#"{"type": "HostNextRound"}"#,
             },
             TestCase {
                 name: "Empty JSON",
@@ -604,7 +612,7 @@ mod test {
             },
             TestCase {
                 name: "HostNextRound",
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 should_witness: false,
             },
             TestCase {
@@ -683,7 +691,7 @@ mod test {
             },
             TestCase {
                 name: "HostNextRound",
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 host_command: true,
             },
             TestCase {

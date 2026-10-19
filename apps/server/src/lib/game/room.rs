@@ -300,7 +300,17 @@ impl Room {
 
             GameCommand::HostContinue => self.handle_host_continue(),
 
-            GameCommand::HostNextRound => {
+            GameCommand::HostNextRound { round } => {
+                // A stale second click must not end the round that the first one started
+                if *round != self.round_index {
+                    tracing::info!(
+                        room_code = %self.code,
+                        round,
+                        current_round = self.round_index,
+                        "Ignoring HostNextRound for a round that already ended"
+                    );
+                    return RoomResponse::new();
+                }
                 tracing::info!(
                     room_code = %self.code,
                     round = self.round_index,
@@ -362,7 +372,7 @@ impl Room {
                 GameState::QuestionReading | GameState::WaitingForBuzz
             ),
             GameCommand::HostContinue => self.state == GameState::AnswerReveal,
-            GameCommand::HostNextRound => self.state == GameState::Selection,
+            GameCommand::HostNextRound { .. } => self.state == GameState::Selection,
             GameCommand::Heartbeat { .. } | GameCommand::LatencyOfHeartbeat { .. } => true,
         }
     }
@@ -1286,7 +1296,7 @@ mod tests {
             TestCase {
                 name: "Player cannot end the round",
                 initial_state: GameState::Selection,
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 sender: Sender::Player(1),
             },
             TestCase {
@@ -1459,42 +1469,42 @@ mod tests {
                 name: "HostNextRound before the game started",
                 initial_state: GameState::Start,
                 setup: |_| {},
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 sender: Sender::Host,
             },
             TestCase {
                 name: "HostNextRound while a question is being read",
                 initial_state: GameState::QuestionReading,
                 setup: |_| {},
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 sender: Sender::Host,
             },
             TestCase {
                 name: "HostNextRound while waiting for a buzz",
                 initial_state: GameState::WaitingForBuzz,
                 setup: |_| {},
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 sender: Sender::Host,
             },
             TestCase {
                 name: "HostNextRound while a player is answering",
                 initial_state: GameState::Answer,
                 setup: |_| {},
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 sender: Sender::Host,
             },
             TestCase {
                 name: "HostNextRound during the answer reveal",
                 initial_state: GameState::AnswerReveal,
                 setup: |_| {},
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 sender: Sender::Host,
             },
             TestCase {
                 name: "HostNextRound after the game ended",
                 initial_state: GameState::GameEnd,
                 setup: |_| {},
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 sender: Sender::Host,
             },
         ];
@@ -1811,7 +1821,7 @@ mod tests {
                 create_room: create_two_round_room,
                 initial_state: GameState::Selection,
                 setup: |_| {},
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 expected_state: GameState::Selection,
                 expected_round: 1,
             },
@@ -1820,7 +1830,7 @@ mod tests {
                 create_room: create_two_round_room,
                 initial_state: GameState::Selection,
                 setup: |room| room.round_index = 1,
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 1 },
                 expected_state: GameState::GameEnd,
                 expected_round: 1,
             },
@@ -1829,7 +1839,7 @@ mod tests {
                 create_room: create_test_room,
                 initial_state: GameState::Selection,
                 setup: |_| {},
-                command: GameCommand::HostNextRound,
+                command: GameCommand::HostNextRound { round: 0 },
                 expected_state: GameState::GameEnd,
                 expected_round: 0,
             },
@@ -1871,6 +1881,25 @@ mod tests {
                 tc.name
             );
         }
+    }
+
+    #[test]
+    fn test_stale_host_next_round_is_ignored() {
+        let mut room = create_two_round_room();
+        add_test_player(&mut room, 1, "AJ");
+        room.state = GameState::Selection;
+
+        room.handle_command(&GameCommand::HostNextRound { round: 0 }, Sender::Host);
+        assert_eq!(room.round_index, 1);
+
+        // A second click on End Round for Jeopardy arrives after Double Jeopardy started
+        let response = room.handle_command(&GameCommand::HostNextRound { round: 0 }, Sender::Host);
+        assert!(is_empty(&response), "Stale HostNextRound should be ignored");
+        assert_eq!(room.state, GameState::Selection);
+        assert_eq!(room.round_index, 1);
+
+        room.handle_command(&GameCommand::HostNextRound { round: 1 }, Sender::Host);
+        assert_eq!(room.state, GameState::GameEnd);
     }
 
     /// Plays one clue to the end: `pid` buzzes in and is judged, then the host continues.
@@ -1968,7 +1997,7 @@ mod tests {
         assert!(room.rounds[1][0].questions[1].answered);
         assert!(!room.rounds[1][0].questions[0].answered);
 
-        let response = room.handle_command(&GameCommand::HostNextRound, Sender::Host);
+        let response = room.handle_command(&GameCommand::HostNextRound { round: 1 }, Sender::Host);
         assert_eq!(room.state, GameState::GameEnd);
         assert_eq!(room.winner, Some(1));
         assert_eq!(
