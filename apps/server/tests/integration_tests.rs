@@ -920,6 +920,38 @@ mod gameplay_tests {
             "Players should be told Double Jeopardy started"
         );
 
+        // A reconnecting host gets the Double Jeopardy board
+        drop(host_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let reconnect_state = recv_msgs(&mut host_ws)
+            .await
+            .into_iter()
+            .find_map(|m| match m {
+                GameEvent::GameState {
+                    round,
+                    round_count,
+                    categories,
+                    ..
+                } => Some((round, round_count, categories[0].title.clone())),
+                _ => None,
+            })
+            .expect("Reconnecting host should receive GameState");
+        assert_eq!(reconnect_state, (1, 2, "Double".to_string()));
+
+        // A late joiner is told it's Double Jeopardy
+        let mut late_ws = connect_ws_client(port, &room_code, "?playerName=Late").await;
+        let late_round = recv_msgs(&mut late_ws)
+            .await
+            .into_iter()
+            .find_map(|m| match m {
+                GameEvent::PublicState { state, round, .. } => Some((state, round)),
+                _ => None,
+            });
+        assert_eq!(late_round, Some((GameState::Selection, 1)));
+        let _ = recv_msgs(&mut host_ws).await;
+
         // Clue indices now refer to the Double Jeopardy board (+800)
         play_question(&mut host_ws, &mut aj_ws, 0, 1, true).await;
         {
