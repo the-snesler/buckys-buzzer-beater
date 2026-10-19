@@ -226,7 +226,7 @@ impl Room {
 
         let response = match cmd {
             GameCommand::StartGame => {
-                self.state = GameState::Selection;
+                self.enter_round(0);
                 self.broadcast_state()
             }
 
@@ -443,6 +443,7 @@ impl Room {
 
         self.current_question = None;
         self.current_buzzer = None;
+        self.buzz_window = None;
 
         for player in &mut self.players {
             player.player.buzzed = false;
@@ -465,8 +466,14 @@ impl Room {
     }
 
     /// Moves on from the current round, whether or not its board is cleared: to the next
-    /// round's board if there is one, otherwise to the end of the game
+    /// round with clues to play if there is one, otherwise to the end of the game
     fn finish_round(&mut self) {
+        self.enter_round(self.round_index + 1);
+    }
+
+    /// Starts the first round from `first` on that has a clue left to play, skipping
+    /// empty rounds. If there is none, the game ends.
+    fn enter_round(&mut self, first: usize) {
         self.current_question = None;
         self.current_buzzer = None;
         self.buzz_window = None;
@@ -474,12 +481,14 @@ impl Room {
             player.player.buzzed = false;
         }
 
-        if self.round_index + 1 < self.rounds.len() {
-            self.round_index += 1;
+        let next = (first..self.rounds.len()).find(|&round| round_has_clues(&self.rounds[round]));
+
+        if let Some(round) = next {
+            self.round_index = round;
             tracing::info!(
                 room_code = %self.code,
                 round = self.round_index,
-                "Starting the next round"
+                "Starting round"
             );
             self.state = GameState::Selection;
         } else {
@@ -553,10 +562,15 @@ impl Room {
 
     /// Whether the current round's board has any clues left
     fn has_remaining_questions(&self) -> bool {
-        self.current_categories()
-            .iter()
-            .any(|cat| cat.questions.iter().any(|q| !q.answered))
+        round_has_clues(self.current_categories())
     }
+}
+
+/// Whether a round's board has any clues left to play
+fn round_has_clues(categories: &[Category]) -> bool {
+    categories
+        .iter()
+        .any(|cat| cat.questions.iter().any(|q| !q.answered))
 }
 
 #[cfg(test)]
@@ -1843,6 +1857,67 @@ mod tests {
                 expected_state: GameState::GameEnd,
                 expected_round: 0,
             },
+            TestCase {
+                name: "StartGame starts Jeopardy",
+                create_room: create_two_round_room,
+                initial_state: GameState::Start,
+                setup: |_| {},
+                command: GameCommand::StartGame,
+                expected_state: GameState::Selection,
+                expected_round: 0,
+            },
+            TestCase {
+                name: "StartGame skips an empty Jeopardy board",
+                create_room: create_two_round_room,
+                initial_state: GameState::Start,
+                setup: |room| room.rounds[0].clear(),
+                command: GameCommand::StartGame,
+                expected_state: GameState::Selection,
+                expected_round: 1,
+            },
+            TestCase {
+                name: "StartGame skips a Jeopardy board with every clue answered",
+                create_room: create_two_round_room,
+                initial_state: GameState::Start,
+                setup: |room| answer_round(room, 0),
+                command: GameCommand::StartGame,
+                expected_state: GameState::Selection,
+                expected_round: 1,
+            },
+            TestCase {
+                name: "StartGame with no clues in any round ends the game",
+                create_room: create_two_round_room,
+                initial_state: GameState::Start,
+                setup: |room| {
+                    room.rounds[0].clear();
+                    room.rounds[1].clear();
+                },
+                command: GameCommand::StartGame,
+                expected_state: GameState::GameEnd,
+                expected_round: 0,
+            },
+            TestCase {
+                name: "Clearing the Jeopardy board skips a Double Jeopardy without clues",
+                create_room: create_two_round_room,
+                initial_state: GameState::AnswerReveal,
+                setup: |room| {
+                    room.rounds[1][0].questions.clear();
+                    answer_round(room, 0);
+                    room.current_question = Some((0, 1));
+                },
+                command: GameCommand::HostContinue,
+                expected_state: GameState::GameEnd,
+                expected_round: 0,
+            },
+            TestCase {
+                name: "HostNextRound skips a Double Jeopardy with every clue answered",
+                create_room: create_two_round_room,
+                initial_state: GameState::Selection,
+                setup: |room| answer_round(room, 1),
+                command: GameCommand::HostNextRound { round: 0 },
+                expected_state: GameState::GameEnd,
+                expected_round: 0,
+            },
         ];
 
         for tc in test_cases {
@@ -1851,6 +1926,11 @@ mod tests {
             add_test_player(&mut room, 2, "Sam");
             room.players[0].player.score = 600;
             room.players[0].player.buzzed = true;
+            room.current_buzzer = Some(1);
+            room.buzz_window = Some(BuzzWindow {
+                id: 1,
+                buzzes: vec![(2, 300)],
+            });
             room.state = tc.initial_state;
             (tc.setup)(&mut room);
 
@@ -1859,6 +1939,8 @@ mod tests {
             assert_eq!(room.state, tc.expected_state, "{}: state", tc.name);
             assert_eq!(room.round_index, tc.expected_round, "{}: round", tc.name);
             assert_eq!(room.current_question, None, "{}: question", tc.name);
+            assert_eq!(room.current_buzzer, None, "{}: buzzer", tc.name);
+            assert!(room.buzz_window.is_none(), "{}: buzz window", tc.name);
             assert!(
                 room.players.iter().all(|p| !p.player.buzzed),
                 "{}: buzz states not reset",

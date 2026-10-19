@@ -232,6 +232,7 @@ mod gameplay_tests {
     async fn test_player_reconnect() {
         let (_server, port, state) = start_test_server().await;
         let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
 
         let host_token = {
             let room_map = state.room_map.lock().await;
