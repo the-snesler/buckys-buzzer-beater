@@ -33,6 +33,9 @@ pub struct DailyDouble {
 /// The longest Final Jeopardy response kept, in characters. Anything longer is cut off.
 pub const FINAL_ANSWER_MAX_CHARS: usize = 200;
 
+/// The wager of a player with a score of $0 or less, who has nothing to wager
+pub const FINAL_FIXED_WAGER: u32 = 1;
+
 /// One player's part in Final Jeopardy
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FinalEntry {
@@ -55,9 +58,6 @@ impl FinalEntry {
         }
     }
 }
-
-/// The wager of a player with a score of $0 or less, who has nothing to wager
-pub const FINAL_FIXED_WAGER: u32 = 1;
 
 /// Final Jeopardy being played, from when it starts until the game ends
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
