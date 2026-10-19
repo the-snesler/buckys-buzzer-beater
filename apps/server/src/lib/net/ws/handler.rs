@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::FutureExt;
-use tokio::select;
+use tokio::{select, sync::mpsc};
 
 use crate::{
     AppState,
@@ -19,7 +19,10 @@ use crate::{
         messages::{GameCommand, GameEvent, Sender},
     },
     game::{RoomResponse, room::BUZZ_WINDOW},
-    net::ws::session::setup_session,
+    net::{
+        connection::{EVENT_QUEUE_CAPACITY, send_event},
+        ws::session::setup_session,
+    },
 };
 
 pub async fn ws_upgrade_handler(
@@ -61,7 +64,7 @@ pub async fn ws_socket_handler(
     state: Arc<AppState>,
     query: WsQuery,
 ) -> anyhow::Result<()> {
-    let (tx, rx) = tokio_mpmc::channel(20);
+    let (tx, mut rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
 
     tracing::info!("setting up session");
     let sender = setup_session(&state, &code, &query, tx.clone()).await?;
@@ -72,11 +75,11 @@ pub async fn ws_socket_handler(
         select! {
             res = rx.recv().fuse() => {
                 match res {
-                    Ok(Some(msg)) => {
+                    Some(msg) => {
                         let text = serde_json::to_string(&msg)?;
                         ws.send(Message::Text(Utf8Bytes::from(text))).await?;
                     }
-                    _ => break, // Channel closed, exit loop
+                    None => break, // Channel closed, exit loop
                 }
             },
             msg = ws.recv().fuse() => {
@@ -92,7 +95,7 @@ pub async fn ws_socket_handler(
                 };
 
                 if let GameCommand::Heartbeat { hbid, .. } = &cmd {
-                    let _ = self_tx.send(GameEvent::GotHeartbeat { hbid: *hbid }).await;
+                    send_event(&self_tx, GameEvent::GotHeartbeat { hbid: *hbid });
                 }
 
                 let response = {
@@ -165,7 +168,8 @@ async fn parse_message(
     }
 }
 
-/// Dispatches response messages to appropriate recipients.
+/// Dispatches response messages to appropriate recipients. Sending never waits, so a
+/// client that stops reading can't hold up the room lock.
 async fn dispatch_responses(state: &Arc<AppState>, code: &str, response: RoomResponse) {
     tracing::debug!(
         "Dispatching responses: {} to host, {} broadcast, {} specific",
@@ -177,7 +181,7 @@ async fn dispatch_responses(state: &Arc<AppState>, code: &str, response: RoomRes
     let room_map = state.room_map.lock().await;
     if let Some(room) = room_map.get(code) {
         if let Some(event) = response.witness {
-            room.broadcast_witness(event).await;
+            room.broadcast_witness(event);
         }
 
         if let Some(host) = &room.host {
@@ -186,19 +190,19 @@ async fn dispatch_responses(state: &Arc<AppState>, code: &str, response: RoomRes
                 response.messages_to_host.len()
             );
             for msg in response.messages_to_host {
-                let _ = host.sender.send(msg).await;
+                send_event(&host.sender, msg);
             }
         }
 
         for msg in response.messages_to_players {
             for player in &room.players {
-                let _ = player.sender.send(msg.clone()).await;
+                send_event(&player.sender, msg.clone());
             }
         }
 
         for (pid, msg) in response.messages_to_specific {
             if let Some(player) = room.players.iter().find(|p| p.player.pid == pid) {
-                let _ = player.sender.send(msg).await;
+                send_event(&player.sender, msg);
             }
         }
     }

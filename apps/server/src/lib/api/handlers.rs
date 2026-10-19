@@ -98,7 +98,7 @@ pub fn perform_handshake(room: &Room, query: &WsQuery) -> anyhow::Result<Authent
 
 #[cfg(test)]
 mod test {
-    use tokio_mpmc::channel;
+    use tokio::sync::mpsc::channel;
 
     use crate::{
         Player,

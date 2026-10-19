@@ -78,7 +78,7 @@ pub async fn cpr_handler(
             Err(e) => Err(e),
             Ok(room) => {
                 for entry in &mut room.players {
-                    match entry.heartbeat().await {
+                    match entry.heartbeat() {
                         Ok(()) => {}
                         Err(e) => {
                             tracing::warn!(

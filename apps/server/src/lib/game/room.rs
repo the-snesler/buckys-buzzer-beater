@@ -7,7 +7,7 @@ use crate::{
     HostEntry, Player, PlayerEntry, PlayerId,
     api::messages::{GameCommand, GameEvent, Sender},
     game::{Category, GameState, RoomResponse},
-    net::connection::{HostToken, RoomCode},
+    net::connection::{HostToken, RoomCode, send_event},
 };
 
 /// How long the server keeps accepting buzzes after the first one arrives. Buzzes are
@@ -121,7 +121,7 @@ impl Room {
     }
 
     /// Broadcasts a witnessed event to all players with latency compensation
-    pub async fn broadcast_witness(&self, event: GameEvent) {
+    pub fn broadcast_witness(&self, event: GameEvent) {
         let _max_latency = self
             .players
             .iter()
@@ -142,7 +142,7 @@ impl Room {
 
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
-                let _ = sender.send(event_clone).await;
+                send_event(&sender, event_clone);
             });
         }
     }
@@ -493,7 +493,7 @@ impl Room {
 
 #[cfg(test)]
 mod tests {
-    use tokio_mpmc::channel;
+    use tokio::sync::mpsc::channel;
 
     use crate::{game::Question, net::connection::PlayerToken};
 

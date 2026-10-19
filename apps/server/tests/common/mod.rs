@@ -148,12 +148,17 @@ pub async fn create_room_http(port: u16) -> String {
 
 /// Add categories to an existing room
 pub async fn add_room_categories(state: &AppState, room_code: &str) {
+    add_room_category(state, room_code, 3).await;
+}
+
+/// Add a category with `question_count` questions, worth 100, 200, ..., to an existing room
+pub async fn add_room_category(state: &AppState, room_code: &str, question_count: usize) {
     let mut room_map = state.room_map.lock().await;
     let room = room_map
         .get_mut(room_code)
         .unwrap_or_else(|| panic!("Failed to get room with code: {}", room_code));
 
-    let questions: Vec<Question> = (0..=2)
+    let questions: Vec<Question> = (0..question_count)
         .map(|i| Question {
             question: format!("Question {}", i + 1),
             answer: format!("Answer {}", i + 1),
@@ -169,6 +174,16 @@ pub async fn add_room_categories(state: &AppState, room_code: &str) {
             title: "Category 1".to_string(),
         },
     );
+}
+
+/// Send a command without waiting for any response
+pub async fn send_cmd(ws: &mut WsStream, cmd: &GameCommand) {
+    use tokio_tungstenite::tungstenite::Message;
+
+    let json = serde_json::to_string(cmd).expect("Failed to serialize");
+    ws.send(Message::Text(Utf8Bytes::from(json)))
+        .await
+        .expect("Failed to send message");
 }
 
 /// Add a player and return their websocket and ID

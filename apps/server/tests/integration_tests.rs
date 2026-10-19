@@ -668,6 +668,93 @@ mod gameplay_tests {
     }
 
     #[tokio::test]
+    async fn test_disconnected_player_does_not_freeze_server() {
+        const QUESTIONS: usize = 40;
+
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http(port).await;
+        add_room_category(&state, &room_code, QUESTIONS).await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let (player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let player_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            room.players[0].player.token.clone()
+        };
+
+        // The player closes their tab, but stays in the room
+        drop(player_ws);
+        sleep(Duration::from_millis(100)).await;
+
+        // Every one of these sends the player several messages that nobody reads
+        send_cmd(&mut host_ws, &GameCommand::StartGame).await;
+        for question_index in 0..QUESTIONS {
+            send_cmd(
+                &mut host_ws,
+                &GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index,
+                },
+            )
+            .await;
+            send_cmd(&mut host_ws, &GameCommand::HostSkip).await;
+            send_cmd(&mut host_ws, &GameCommand::HostContinue).await;
+        }
+
+        let finished = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let _ = recv_msgs(&mut host_ws).await;
+                let room_map = state.room_map.lock().await;
+                let room = room_map.get(&room_code).expect("Could not find room");
+                if room.state == GameState::GameEnd {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(
+            finished.is_ok(),
+            "Server froze sending to a disconnected player"
+        );
+
+        // The player can still come back
+        let mut player_reconnect = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", player_token, player_id),
+        )
+        .await;
+        let reconnect_msgs =
+            tokio::time::timeout(Duration::from_secs(5), recv_msgs(&mut player_reconnect))
+                .await
+                .expect("Reconnect timed out");
+        assert!(
+            reconnect_msgs.iter().any(|m| matches!(
+                m,
+                GameEvent::PublicState {
+                    state: GameState::GameEnd,
+                    ..
+                }
+            )),
+            "Reconnected player should get the current state: {:?}",
+            reconnect_msgs
+        );
+    }
+
+    #[tokio::test]
     async fn test_full_game() {
         let (_server, port, state) = start_test_server().await;
         let room_code = create_room_http(port).await;

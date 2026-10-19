@@ -7,10 +7,35 @@ use std::{
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tokio_mpmc::Sender;
+use tokio::sync::mpsc::{self, error::TrySendError};
 use uuid::Uuid;
 
 use crate::{HeartbeatId, Player, TrackedMessageTime, UnixMs, api::messages::GameEvent};
+
+/// The queue of events waiting to be written to a client's WebSocket
+pub type EventSender = mpsc::Sender<GameEvent>;
+
+/// How many events can wait for a client's WebSocket before newer ones are dropped
+pub const EVENT_QUEUE_CAPACITY: usize = 64;
+
+/// Queues `event` for a client without waiting, so it is safe to call while holding the
+/// room lock. If the client's socket has closed, or it has fallen far behind, the event is
+/// dropped; a client that reconnects is sent the current state anyway.
+///
+/// Returns whether the event was queued.
+pub fn send_event(sender: &EventSender, event: GameEvent) -> bool {
+    match sender.try_send(event) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_)) => {
+            tracing::debug!("Client's event queue is full, dropping event");
+            false
+        }
+        Err(TrySendError::Closed(_)) => {
+            tracing::debug!("Client has disconnected, dropping event");
+            false
+        }
+    }
+}
 
 /// A unique identifier for a game room (e.g., "AFKRTWZ")
 ///
@@ -148,9 +173,14 @@ impl From<Uuid> for PlayerToken {
     }
 }
 
+/// How many events are waiting to be written to a client's WebSocket
+pub fn queued_events(sender: &EventSender) -> usize {
+    sender.max_capacity() - sender.capacity()
+}
+
 pub struct PlayerEntry {
     pub player: Player,
-    pub sender: Sender<GameEvent>,
+    pub sender: EventSender,
     pub status: ConnectionStatus,
     latencies: [u32; 5],
     times_doheartbeat: HashMap<HeartbeatId, TrackedMessageTime>,
@@ -163,7 +193,7 @@ impl fmt::Debug for PlayerEntry {
             .field("player", &self.player)
             .field("status", &self.status)
             .field("latencies", &self.latencies)
-            .field("sender len", &self.sender.len())
+            .field("queued events", &queued_events(&self.sender))
             .field("times_doheartbeat", &self.times_doheartbeat)
             .field("hbid_counter", &self.hbid_counter)
             .finish()
@@ -171,7 +201,7 @@ impl fmt::Debug for PlayerEntry {
 }
 
 impl PlayerEntry {
-    pub fn new(player: Player, sender: Sender<GameEvent>) -> Self {
+    pub fn new(player: Player, sender: EventSender) -> Self {
         Self {
             player,
             sender,
@@ -255,12 +285,12 @@ impl PlayerEntry {
         t_part + (self.hbid_counter * 1_000)
     }
 
-    pub async fn heartbeat(&mut self) -> anyhow::Result<()> {
+    pub fn heartbeat(&mut self) -> anyhow::Result<()> {
         let t_sent = Self::time_ms();
         let hbid = self.generate_hbid(t_sent);
-        self.sender
-            .send(GameEvent::DoHeartbeat { hbid, t_sent })
-            .await?;
+        if !send_event(&self.sender, GameEvent::DoHeartbeat { hbid, t_sent }) {
+            anyhow::bail!("Could not queue heartbeat");
+        }
         self.record_dohb(hbid, t_sent);
         Ok(())
     }
