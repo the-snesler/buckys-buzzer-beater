@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   defaultCategoryTitle,
@@ -13,6 +13,7 @@ import {
 import {
   countRoundDailyDoubles,
   findGameProblems,
+  GameFileError,
   parseGameFile,
   toGameFile,
   type FinalClue,
@@ -56,6 +57,11 @@ function createEmptyRound(round: Round): GameCategory[] {
   return Array.from({ length: 6 }, (_, i) => createEmptyCategory(round, i));
 }
 
+/** What happened when the user last opened a game file */
+type OpenedFile =
+  | { kind: 'opened'; name: string; warnings: string[] }
+  | { kind: 'error'; name: string; message: string };
+
 function createEmptyDraft(): BuilderDraft {
   return { single: createEmptyRound('single'), double: null, final: null };
 }
@@ -74,6 +80,8 @@ export default function GameBuilder() {
   const [double, setDouble] = useState<GameCategory[] | null>(initial.double);
   /** Null while the game has no Final Jeopardy */
   const [final, setFinal] = useState<FinalClue | null>(initial.final);
+  const [openedFile, setOpenedFile] = useState<OpenedFile | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Keep the draft, so leaving the builder, going back or reloading doesn't lose it
   useEffect(() => {
@@ -102,6 +110,36 @@ export default function GameBuilder() {
       return;
     }
     loadDraft(createEmptyDraft());
+    setOpenedFile(null);
+  };
+
+  const openJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Let the same file be opened again later
+    e.target.value = '';
+    if (!file) return;
+
+    let opened;
+    try {
+      opened = parseGameFile(JSON.parse(await file.text()));
+    } catch (err) {
+      const message =
+        err instanceof GameFileError
+          ? err.message
+          : err instanceof SyntaxError
+          ? 'This is not a valid JSON file'
+          : 'Could not read this file';
+      setOpenedFile({ kind: 'error', name: file.name, message });
+      return;
+    }
+    if (
+      draftHasContent({ single, double, final }) &&
+      !window.confirm(`Replace the game you're building with ${file.name}?`)
+    ) {
+      return;
+    }
+    loadDraft(draftFromGame(opened));
+    setOpenedFile({ kind: 'opened', name: file.name, warnings: opened.warnings });
   };
 
   const game = { single, double: double ?? [], final };
@@ -175,6 +213,19 @@ export default function GameBuilder() {
               New Game
             </button>
             <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600"
+            >
+              Open JSON
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={openJson}
+              className="hidden"
+            />
+            <button
               onClick={downloadJson}
               className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
             >
@@ -189,6 +240,38 @@ export default function GameBuilder() {
             </button>
           </div>
         </div>
+
+        {openedFile && (
+          <div
+            className={`mb-4 rounded border px-4 py-3 text-sm ${
+              openedFile.kind === 'error'
+                ? 'border-red-700 bg-red-900/30 text-red-200'
+                : 'border-green-700 bg-green-900/30 text-green-200'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <p className="break-words">
+                {openedFile.kind === 'error'
+                  ? `Couldn't open ${openedFile.name}: ${openedFile.message}`
+                  : `Opened ${openedFile.name}.`}
+              </p>
+              <button
+                onClick={() => setOpenedFile(null)}
+                aria-label="Dismiss"
+                className="text-gray-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            {openedFile.kind === 'opened' && openedFile.warnings.length > 0 && (
+              <ul className="mt-2 space-y-1 text-yellow-200">
+                {openedFile.warnings.map((warning) => (
+                  <li key={warning}>⚠ {warning}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         {!isValid && (
           <div className="text-yellow-400 mb-4">
