@@ -103,25 +103,39 @@ export function gameFromCategories(categories: Category[]): ParsedGame {
 }
 
 /**
- * The categories of a round, as sent to the server. Daily Doubles aren't played yet, so
- * their flags stay here.
+ * The categories of a round, as sent to the server. The server keeps the Daily Double
+ * flags to itself, so they never come back in the game state.
  */
-export function toServerCategories(categories: GameCategory[]): Category[] {
+export function toServerCategories(categories: GameCategory[]): GameCategory[] {
   return categories.map((category) => ({
     title: category.title,
-    questions: category.questions.map(({ question, answer, value, answered }) => ({
+    questions: category.questions.map(({ question, answer, value, answered, dailyDouble }) => ({
       question,
       answer,
       value,
       answered,
+      dailyDouble,
     })),
   }));
 }
 
-/** A one-line summary of what the game contains, such as "6 categories + Double Jeopardy" */
+/** How many Daily Doubles the game file hides across its rounds */
+export function countDailyDoubles(game: ParsedGame): number {
+  return [...game.single, ...game.double]
+    .flatMap((category) => category.questions)
+    .filter((question) => question.dailyDouble).length;
+}
+
+/**
+ * A one-line summary of what the game contains, such as
+ * "6 categories + Double Jeopardy, 3 Daily Doubles"
+ */
 export function describeGame(game: ParsedGame): string {
   const categories = `${game.single.length} ${game.single.length === 1 ? "category" : "categories"}`;
-  return game.double.length > 0 ? `${categories} + Double Jeopardy` : categories;
+  const rounds = game.double.length > 0 ? `${categories} + Double Jeopardy` : categories;
+  const dailyDoubles = countDailyDoubles(game);
+  if (dailyDoubles === 0) return rounds;
+  return `${rounds}, ${dailyDoubles} Daily Double${dailyDoubles === 1 ? "" : "s"}`;
 }
 
 function parseDouble(double: unknown): GameCategory[] {

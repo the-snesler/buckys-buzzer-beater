@@ -26,6 +26,7 @@ export default function Lobby() {
   const [game, setGame] = useState<ParsedGame | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fromBuilder, setFromBuilder] = useState(false);
+  const [randomDailyDoubles, setRandomDailyDoubles] = useState(false);
 
   // Load categories from navigation state (from GameBuilder)
   useEffect(() => {
@@ -98,6 +99,7 @@ export default function Lobby() {
       const { roomCode, hostToken } = await createRoom({
         categories: toServerCategories(game.single),
         doubleCategories: toServerCategories(game.double),
+        randomDailyDoubles,
       });
       // Store host token for WebSocket auth
       sessionStorage.setItem(`host_token_${roomCode}`, hostToken);
@@ -260,6 +262,22 @@ export default function Lobby() {
                 ))}
               </ul>
             )}
+
+            <label className="mt-4 flex items-start gap-3 text-white cursor-pointer">
+              <input
+                type="checkbox"
+                checked={randomDailyDoubles}
+                onChange={(e) => setRandomDailyDoubles(e.target.checked)}
+                className="mt-1 w-5 h-5 accent-red-600"
+              />
+              <span>
+                <span className="font-bold">Randomly place Daily Doubles</span>
+                <span className="block text-sm text-stone-400">
+                  Hides 1 in Jeopardy and 2 in Double Jeopardy, in rounds where the game has
+                  none of its own. Nobody, not even the host, can see where they are.
+                </span>
+              </span>
+            </label>
           </div>
 
           <button

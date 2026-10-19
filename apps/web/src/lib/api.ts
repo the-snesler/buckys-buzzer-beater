@@ -1,4 +1,4 @@
-import type { Category } from "../types/game";
+import type { GameCategory } from "./gameFile";
 
 const API_BASE = "/api/v1";
 
@@ -9,9 +9,14 @@ export interface CreateRoomResponse {
 
 export interface CreateRoomOptions {
   /** The Jeopardy round's board */
-  categories?: Category[];
+  categories?: GameCategory[];
   /** The Double Jeopardy round's board. Empty or omitted if the game has none. */
-  doubleCategories?: Category[];
+  doubleCategories?: GameCategory[];
+  /**
+   * Whether the server hides Daily Doubles at random: 1 in Jeopardy and 2 in Double
+   * Jeopardy, in rounds where the game file has none
+   */
+  randomDailyDoubles?: boolean;
 }
 
 export async function createRoom(options: CreateRoomOptions = {}): Promise<CreateRoomResponse> {
