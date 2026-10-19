@@ -10,6 +10,20 @@ use crate::{
     net::connection::{HostToken, RoomCode},
 };
 
+/// How long the server keeps accepting buzzes after the first one arrives. Buzzes are
+/// ranked by client-measured reaction time, so this needs to cover the spread of
+/// players' network latencies.
+pub const BUZZ_WINDOW: Duration = Duration::from_millis(250);
+
+pub type BuzzWindowId = u64;
+
+#[derive(Debug, PartialEq)]
+pub struct BuzzWindow {
+    pub id: BuzzWindowId,
+    /// (player, reaction time in ms), in order of arrival
+    pub buzzes: Vec<(PlayerId, u32)>,
+}
+
 pub struct Room {
     pub code: RoomCode,
     pub host_token: HostToken,
@@ -19,6 +33,8 @@ pub struct Room {
     pub categories: Vec<Category>,
     pub current_question: Option<(usize, usize)>, // (category_index, question_index)
     pub current_buzzer: Option<PlayerId>,
+    pub buzz_window: Option<BuzzWindow>,
+    next_buzz_window_id: BuzzWindowId,
     pub last_activity: SystemTime,
     pub winner: Option<PlayerId>,
 }
@@ -34,6 +50,7 @@ impl fmt::Debug for Room {
             .field("category count", &self.categories.len())
             .field("current question", &self.current_question)
             .field("current buzzer", &self.current_buzzer)
+            .field("buzz window", &self.buzz_window)
             .finish()
     }
 }
@@ -49,6 +66,8 @@ impl Room {
             categories: Vec::new(),
             current_question: None,
             current_buzzer: None,
+            buzz_window: None,
+            next_buzz_window_id: 0,
             last_activity: SystemTime::now(),
             winner: None,
         }
@@ -171,6 +190,7 @@ impl Room {
             } => {
                 self.current_question = Some((*category_index, *question_index));
                 self.current_buzzer = None;
+                self.buzz_window = None;
                 for player in &mut self.players {
                     player.player.buzzed = false;
                 }
@@ -179,34 +199,38 @@ impl Room {
                     .merge(self.build_all_player_states())
             }
 
-            GameCommand::Buzz => {
+            GameCommand::Buzz { reaction_ms } => {
                 if self.state == GameState::WaitingForBuzz
                     && let Some(player_id) = sender_id
                     && let Some(player_entry) =
-                        self.players.iter_mut().find(|p| p.player.pid == player_id)
+                        self.players.iter().find(|p| p.player.pid == player_id)
                     && !player_entry.player.buzzed
                 {
-                    tracing::info!(
-                        player_id,
-                        player_name = %player_entry.player.name,
-                        "Player buzzed in"
-                    );
-                    player_entry.player.buzzed = true;
-                    self.current_buzzer = Some(player_id);
-                    self.state = GameState::Answer;
-
-                    let buzzed_msg = GameEvent::PlayerBuzzed {
-                        pid: player_id,
-                        name: player_entry.player.name.clone(),
-                    };
-
-                    return RoomResponse::to_host(buzzed_msg)
-                        .merge(RoomResponse::broadcast_state(self.build_game_state_msg()))
-                        .merge(self.build_all_player_states());
+                    tracing::debug!(player_id, reaction_ms, "Player buzz received");
+                    match &mut self.buzz_window {
+                        Some(window) => {
+                            if !window.buzzes.iter().any(|(pid, _)| *pid == player_id) {
+                                window.buzzes.push((player_id, *reaction_ms));
+                            }
+                        }
+                        None => {
+                            self.next_buzz_window_id += 1;
+                            let id = self.next_buzz_window_id;
+                            self.buzz_window = Some(BuzzWindow {
+                                id,
+                                buzzes: vec![(player_id, *reaction_ms)],
+                            });
+                            return RoomResponse {
+                                buzz_window_opened: Some(id),
+                                ..RoomResponse::new()
+                            };
+                        }
+                    }
                 }
                 RoomResponse::new()
             }
             GameCommand::HostReady => {
+                self.buzz_window = None;
                 self.state = GameState::WaitingForBuzz;
                 RoomResponse::broadcast_state(self.build_game_state_msg())
                     .merge(self.build_all_player_states())
@@ -245,6 +269,45 @@ impl Room {
                     .merge(self.build_all_player_states())
             }
         }
+    }
+
+    /// Closes the buzz window and gives the question to the fastest reaction time.
+    /// Does nothing if the window was already closed or the game has moved on.
+    pub fn resolve_buzz_window(&mut self, id: BuzzWindowId) -> RoomResponse {
+        let Some(window) = self.buzz_window.take_if(|w| w.id == id) else {
+            return RoomResponse::new();
+        };
+        if self.state != GameState::WaitingForBuzz {
+            return RoomResponse::new();
+        }
+
+        // Ties go to whoever reached the server first
+        let Some(&(player_id, reaction_ms)) = window.buzzes.iter().min_by_key(|(_, r)| *r) else {
+            return RoomResponse::new();
+        };
+        let Some(player_entry) = self.players.iter_mut().find(|p| p.player.pid == player_id) else {
+            return RoomResponse::new();
+        };
+
+        tracing::info!(
+            player_id,
+            player_name = %player_entry.player.name,
+            reaction_ms,
+            contenders = window.buzzes.len(),
+            "Player buzzed in"
+        );
+        player_entry.player.buzzed = true;
+        self.current_buzzer = Some(player_id);
+        self.state = GameState::Answer;
+
+        let buzzed_msg = GameEvent::PlayerBuzzed {
+            pid: player_id,
+            name: player_entry.player.name.clone(),
+        };
+
+        RoomResponse::to_host(buzzed_msg)
+            .merge(RoomResponse::broadcast_state(self.build_game_state_msg()))
+            .merge(self.build_all_player_states())
     }
 
     pub fn handle_host_skip(&mut self) -> RoomResponse {
@@ -537,17 +600,18 @@ mod tests {
                 assertions: |_| {},
             },
             TestCase {
-                name: "Player buzz transitions to Answer",
+                name: "Player buzz opens a buzz window",
                 initial_state: GameState::WaitingForBuzz,
                 setup: |room| {
                     add_test_player(room, 1, "AJ");
                 },
-                command: GameCommand::Buzz {},
+                command: GameCommand::Buzz { reaction_ms: 200 },
                 sender_id: Some(1),
-                expected_state: GameState::Answer,
+                expected_state: GameState::WaitingForBuzz,
                 assertions: |room| {
-                    assert_eq!(room.current_buzzer, Some(1));
-                    assert!(room.players[0].player.buzzed);
+                    assert_eq!(room.current_buzzer, None);
+                    let window = room.buzz_window.as_ref().expect("window should be open");
+                    assert_eq!(window.buzzes, vec![(1, 200)]);
                 },
             },
             TestCase {
@@ -557,11 +621,12 @@ mod tests {
                     add_test_player(room, 1, "AJ");
                     room.players[0].player.buzzed = true;
                 },
-                command: GameCommand::Buzz {},
+                command: GameCommand::Buzz { reaction_ms: 200 },
                 sender_id: Some(1),
                 expected_state: GameState::WaitingForBuzz,
                 assertions: |room| {
                     assert_eq!(room.current_buzzer, None);
+                    assert!(room.buzz_window.is_none());
                 },
             },
         ];
@@ -1005,5 +1070,102 @@ mod tests {
             Some((0, 0)),
             "Current question should remain"
         );
+    }
+
+    fn buzz(room: &mut Room, pid: PlayerId, reaction_ms: u32) -> RoomResponse {
+        room.handle_command(&GameCommand::Buzz { reaction_ms }, Some(pid))
+    }
+
+    #[test]
+    fn test_fastest_reaction_wins_buzz_window() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+        add_test_player(&mut room, 2, "Player2");
+        add_test_player(&mut room, 3, "Player3");
+        room.state = GameState::WaitingForBuzz;
+        room.current_question = Some((0, 0));
+
+        let id = buzz(&mut room, 1, 300)
+            .buzz_window_opened
+            .expect("First buzz should open a window");
+        assert!(buzz(&mut room, 2, 150).buzz_window_opened.is_none());
+        buzz(&mut room, 3, 220);
+
+        room.resolve_buzz_window(id);
+
+        assert_eq!(room.state, GameState::Answer);
+        assert_eq!(
+            room.current_buzzer,
+            Some(2),
+            "Fastest reaction should win even if it arrived later"
+        );
+        assert!(room.players[1].player.buzzed);
+        assert!(
+            !room.players[0].player.buzzed && !room.players[2].player.buzzed,
+            "Losers should be able to buzz again if the winner is wrong"
+        );
+        assert!(room.buzz_window.is_none());
+    }
+
+    #[test]
+    fn test_buzz_window_tie_goes_to_first_arrival() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+        add_test_player(&mut room, 2, "Player2");
+        room.state = GameState::WaitingForBuzz;
+
+        let id = buzz(&mut room, 2, 180)
+            .buzz_window_opened
+            .expect("Buzz should open a window");
+        buzz(&mut room, 1, 180);
+        room.resolve_buzz_window(id);
+
+        assert_eq!(room.current_buzzer, Some(2));
+    }
+
+    #[test]
+    fn test_repeat_buzz_in_window_keeps_first() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+        room.state = GameState::WaitingForBuzz;
+
+        buzz(&mut room, 1, 400);
+        buzz(&mut room, 1, 10);
+
+        assert_eq!(
+            room.buzz_window
+                .as_ref()
+                .expect("window should be open")
+                .buzzes,
+            vec![(1, 400)]
+        );
+    }
+
+    #[test]
+    fn test_stale_buzz_window_is_ignored() {
+        let mut room = create_test_room();
+        add_test_player(&mut room, 1, "Player1");
+        room.state = GameState::WaitingForBuzz;
+        room.current_question = Some((0, 0));
+
+        let id = buzz(&mut room, 1, 200)
+            .buzz_window_opened
+            .expect("Buzz should open a window");
+        room.handle_command(&GameCommand::HostSkip, None);
+        room.resolve_buzz_window(id);
+
+        assert_eq!(room.state, GameState::AnswerReveal);
+        assert_eq!(room.current_buzzer, None);
+        assert!(room.buzz_window.is_none());
+
+        // Resolving a window that was replaced does nothing
+        room.state = GameState::WaitingForBuzz;
+        let new_id = buzz(&mut room, 1, 200)
+            .buzz_window_opened
+            .expect("Buzz should open a window");
+        room.resolve_buzz_window(id);
+        assert_eq!(room.state, GameState::WaitingForBuzz);
+        room.resolve_buzz_window(new_id);
+        assert_eq!(room.current_buzzer, Some(1));
     }
 }

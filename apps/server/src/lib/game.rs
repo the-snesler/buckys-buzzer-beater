@@ -24,6 +24,9 @@ pub struct RoomResponse {
     pub messages_to_host: Vec<GameEvent>,
     pub messages_to_players: Vec<GameEvent>,
     pub messages_to_specific: Vec<(PlayerId, GameEvent)>,
+    /// Set when a buzz opened a new buzz window, which must be resolved once
+    /// [`room::BUZZ_WINDOW`] has elapsed
+    pub buzz_window_opened: Option<room::BuzzWindowId>,
 }
 
 impl Default for RoomResponse {
@@ -38,6 +41,7 @@ impl RoomResponse {
             messages_to_host: vec![],
             messages_to_players: vec![],
             messages_to_specific: vec![],
+            buzz_window_opened: None,
         }
     }
 
@@ -46,6 +50,7 @@ impl RoomResponse {
             messages_to_host: vec![state_msg.clone()],
             messages_to_players: vec![state_msg],
             messages_to_specific: vec![],
+            buzz_window_opened: None,
         }
     }
 
@@ -54,6 +59,7 @@ impl RoomResponse {
             messages_to_host: vec![msg],
             messages_to_players: vec![],
             messages_to_specific: vec![],
+            buzz_window_opened: None,
         }
     }
 
@@ -62,6 +68,7 @@ impl RoomResponse {
             messages_to_host: vec![],
             messages_to_players: vec![],
             messages_to_specific: vec![(player_id, msg)],
+            buzz_window_opened: None,
         }
     }
 
@@ -69,6 +76,7 @@ impl RoomResponse {
         self.messages_to_host.extend(other.messages_to_host);
         self.messages_to_players.extend(other.messages_to_players);
         self.messages_to_specific.extend(other.messages_to_specific);
+        self.buzz_window_opened = self.buzz_window_opened.or(other.buzz_window_opened);
         self
     }
 }

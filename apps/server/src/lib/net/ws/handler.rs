@@ -18,7 +18,7 @@ use crate::{
         handlers::{RoomParams, WsQuery},
         messages::{GameCommand, GameEvent},
     },
-    game::RoomResponse,
+    game::{RoomResponse, room::BUZZ_WINDOW},
     net::ws::session::setup_session,
 };
 
@@ -108,6 +108,22 @@ pub async fn ws_socket_handler(
                     room.touch();
                     resp
                 };
+
+                if let Some(window_id) = response.buzz_window_opened {
+                    let state = state.clone();
+                    let code = code.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(BUZZ_WINDOW).await;
+                        let response = {
+                            let mut room_map = state.room_map.lock().await;
+                            let Some(room) = room_map.get_mut(&code) else {
+                                return;
+                            };
+                            room.resolve_buzz_window(window_id)
+                        };
+                        dispatch_responses(&state, &code, response).await;
+                    });
+                }
 
                 dispatch_responses(&state, &code, response).await;
             }

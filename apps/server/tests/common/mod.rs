@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
-use madhacks2025::game::room::Room;
+use madhacks2025::game::room::{BUZZ_WINDOW, Room};
 use madhacks2025::game::{Category, Question};
 use tokio::sync::MutexGuard;
 use tokio::{net::TcpStream, task::JoinHandle};
@@ -203,7 +203,8 @@ pub async fn play_question(
     let _ = recv_msgs(player_ws).await;
 
     // Player buzz
-    send_cmd_and_recv_all(player_ws, &GameCommand::Buzz).await;
+    send_cmd_and_recv_all(player_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
+    wait_for_buzz_window().await;
     let _ = recv_msgs(host_ws).await;
 
     // Host checks answer
@@ -213,6 +214,11 @@ pub async fn play_question(
     // Host continues from answer reveal
     send_cmd_and_recv_all(host_ws, &GameCommand::HostContinue {}).await;
     let _ = recv_msgs(player_ws).await;
+}
+
+/// Wait for an open buzz window to be resolved
+pub async fn wait_for_buzz_window() {
+    tokio::time::sleep(BUZZ_WINDOW + tokio::time::Duration::from_millis(50)).await;
 }
 
 /// Get player score from room map

@@ -37,7 +37,12 @@ use crate::{
 pub enum GameCommand {
     StartGame,
     EndGame,
-    Buzz,
+    Buzz {
+        /// Milliseconds between the client's buzzer enabling and the player pressing it.
+        /// Measured client-side so network latency doesn't decide who buzzed first.
+        #[serde(rename = "reactionMs")]
+        reaction_ms: u32,
+    },
     HostReady,
     HostChoice {
         #[serde(rename = "categoryIndex")]
@@ -73,7 +78,7 @@ impl GameCommand {
     /// let cmd = GameCommand::HostReady;
     /// assert!(cmd.should_witness(), "HostReady needs synchronization");
     ///
-    /// let cmd = GameCommand::Buzz;
+    /// let cmd = GameCommand::Buzz { reaction_ms: 120 };
     /// assert!(!cmd.should_witness(), "Buzz is handled directly");
     /// ```
     pub fn should_witness(&self) -> bool {
@@ -171,8 +176,8 @@ mod test {
             },
             TestCase {
                 name: "Buzz",
-                json: r#"{"type": "Buzz"}"#,
-                expected: GameCommand::Buzz,
+                json: r#"{"type": "Buzz", "reactionMs": 120}"#,
+                expected: GameCommand::Buzz { reaction_ms: 120 },
             },
             TestCase {
                 name: "HostReady",
@@ -399,7 +404,7 @@ mod test {
             },
             TestCase {
                 name: "Buzz",
-                command: GameCommand::Buzz,
+                command: GameCommand::Buzz { reaction_ms: 120 },
                 should_witness: false,
             },
             TestCase {

@@ -193,7 +193,8 @@ mod gameplay_tests {
             "Player should get WaitingForBuzz state"
         );
 
-        send_cmd_and_recv_all(&mut player_ws, &GameCommand::Buzz {}).await;
+        send_cmd_and_recv_all(&mut player_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
+        wait_for_buzz_window().await;
         let host_buzz = recv_msgs(&mut host_ws).await;
 
         let buzz_notification = host_buzz
@@ -590,7 +591,7 @@ mod gameplay_tests {
         let aj_buzz = tokio::spawn({
             let mut ws = aj_ws;
             async move {
-                send_cmd_and_recv_all(&mut ws, &GameCommand::Buzz {}).await;
+                send_cmd_and_recv_all(&mut ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
                 ws
             }
         });
@@ -598,13 +599,14 @@ mod gameplay_tests {
         let sam_buzz = tokio::spawn({
             let mut ws = sam_ws;
             async move {
-                send_cmd_and_recv_all(&mut ws, &GameCommand::Buzz {}).await;
+                send_cmd_and_recv_all(&mut ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
                 ws
             }
         });
 
         let _aj_ws = aj_buzz.await.expect("Could not find AJ websocket");
         let _sam_ws = sam_buzz.await.expect("Could not find Sam websocket");
+        wait_for_buzz_window().await;
 
         let host_msgs = recv_msgs(&mut host_ws).await;
         let buzz_count = host_msgs
