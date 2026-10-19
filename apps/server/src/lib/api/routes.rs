@@ -60,15 +60,16 @@ pub struct CreateRoomRequest {
     categories: Option<Vec<Category>>,
     /// The Double Jeopardy round's board. Empty if the game has no Double Jeopardy.
     #[serde(default, rename = "doubleCategories")]
-    double_categories: Vec<Category>,
+    double_categories: Option<Vec<Category>>,
 }
 
 impl CreateRoomRequest {
     /// The board of each round, in order. A game without Double Jeopardy has one round.
     fn into_rounds(self) -> Vec<Vec<Category>> {
         let mut rounds = vec![self.categories.unwrap_or_default()];
-        if !self.double_categories.is_empty() {
-            rounds.push(self.double_categories);
+        let double_categories = self.double_categories.unwrap_or_default();
+        if !double_categories.is_empty() {
+            rounds.push(double_categories);
         }
         rounds
     }
@@ -150,6 +151,13 @@ mod test {
                 json: r#"{"categories": [
                     {"title": "Single", "questions": [{"question": "Q", "answer": "A", "value": 200}]}
                 ], "doubleCategories": []}"#,
+                expected_titles: vec![vec!["Single"]],
+            },
+            TestCase {
+                name: "Null Double Jeopardy",
+                json: r#"{"categories": [
+                    {"title": "Single", "questions": [{"question": "Q", "answer": "A", "value": 200}]}
+                ], "doubleCategories": null}"#,
                 expected_titles: vec![vec!["Single"]],
             },
             TestCase {
