@@ -20,6 +20,24 @@ pub type BuzzWindowId = u64;
 /// The smallest Daily Double wager, as on TV
 pub const DAILY_DOUBLE_MIN_WAGER: u32 = 5;
 
+/// A Daily Double being played
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DailyDouble {
+    /// Who chose the Daily Double, and so wagers on it and answers it
+    pub player: PlayerId,
+    /// Their wager, once it has been accepted
+    pub wager: Option<u32>,
+}
+
+/// What a player is told about a wager they're making or have made, see
+/// [`GameEvent::PlayerState`]
+#[derive(Debug, Default, PartialEq)]
+struct WagerView {
+    range: Option<WagerRange>,
+    wager: Option<u32>,
+    prompt: Option<String>,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct BuzzWindow {
     pub id: BuzzWindowId,
@@ -45,9 +63,9 @@ pub struct Room {
     /// who disconnects stays in the room, so they stay the picker until the host chooses
     /// someone else.
     pub picker: Option<PlayerId>,
-    /// The picker's wager on the Daily Double being played. Set from their wager until the
-    /// host moves on from the clue.
-    pub dd_wager: Option<u32>,
+    /// The Daily Double being played, from when it's chosen until the host moves on from
+    /// the clue
+    pub daily_double: Option<DailyDouble>,
     pub buzz_window: Option<BuzzWindow>,
     next_buzz_window_id: BuzzWindowId,
     pub last_activity: SystemTime,
@@ -68,7 +86,7 @@ impl fmt::Debug for Room {
             .field("current question", &self.current_question)
             .field("current buzzer", &self.current_buzzer)
             .field("picker", &self.picker)
-            .field("daily double wager", &self.dd_wager)
+            .field("daily double", &self.daily_double)
             .field("buzz window", &self.buzz_window)
             .finish()
     }
@@ -87,7 +105,7 @@ impl Room {
             current_question: None,
             current_buzzer: None,
             picker: None,
-            dd_wager: None,
+            daily_double: None,
             buzz_window: None,
             next_buzz_window_id: 0,
             last_activity: SystemTime::now(),
@@ -192,7 +210,7 @@ impl Room {
             current_question: self.current_question,
             current_buzzer: self.current_buzzer,
             picker: self.picker,
-            dd_wager: self.dd_wager,
+            dd_wager: self.dd_wager(),
             winner: self.winner,
         }
     }
@@ -210,22 +228,50 @@ impl Room {
     pub fn build_player_state_msg(&self, player_id: PlayerId) -> Option<GameEvent> {
         let player = self.players.iter().find(|p| p.player.pid == player_id)?;
         let can_buzz = self.state == GameState::WaitingForBuzz && !player.player.buzzed;
-        // Only the picker plays a Daily Double, so only they are told about their wager
-        let playing_daily_double = self.picker == Some(player_id)
-            && (self.state == GameState::DailyDoubleWager || self.dd_wager.is_some());
+        let WagerView {
+            range,
+            wager,
+            prompt,
+        } = self.wager_view(player_id);
 
         Some(GameEvent::PlayerState {
             pid: player.player.pid,
             buzzed: player.player.buzzed,
             score: player.player.score,
             can_buzz,
-            wager_range: self.dd_wager_range(player_id),
-            wager: self.dd_wager.filter(|_| playing_daily_double),
-            prompt: self
-                .current_category()
-                .filter(|_| playing_daily_double)
-                .map(|cat| cat.title.clone()),
+            wager_range: range,
+            wager,
+            prompt,
         })
+    }
+
+    /// What `player_id` is told about their wager in the current state. Each phase with a
+    /// wager has its own arm.
+    fn wager_view(&self, player_id: PlayerId) -> WagerView {
+        match self.state {
+            GameState::DailyDoubleWager | GameState::Answer | GameState::AnswerReveal => {
+                self.daily_double_view(player_id)
+            }
+            _ => WagerView::default(),
+        }
+    }
+
+    /// The Daily Double as `player_id` sees it. Only the player who chose it wagers and
+    /// answers, so nobody else is told anything.
+    fn daily_double_view(&self, player_id: PlayerId) -> WagerView {
+        let Some(daily_double) = self.daily_double.filter(|dd| dd.player == player_id) else {
+            return WagerView::default();
+        };
+        WagerView {
+            range: self.dd_wager_range(player_id),
+            wager: daily_double.wager,
+            prompt: self.current_category().map(|cat| cat.title.clone()),
+        }
+    }
+
+    /// The wager on the Daily Double being played, once it has been made
+    pub fn dd_wager(&self) -> Option<u32> {
+        self.daily_double.and_then(|dd| dd.wager)
     }
 
     /// The category of the clue being played
@@ -243,15 +289,19 @@ impl Room {
     /// What the clue being played is worth: the Daily Double wager if there is one,
     /// otherwise the clue's value
     pub fn current_stake(&self) -> Option<u32> {
-        self.dd_wager
+        self.dd_wager()
             .or_else(|| self.current_clue().map(|q| q.value))
     }
 
-    /// The wagers `player_id` may make on the Daily Double, if they are the one wagering:
-    /// from $5 up to their score, or up to the most valuable clue on the board if that's
-    /// more
+    /// The wagers `player_id` may make on the Daily Double, if they are the one wagering
+    /// and haven't yet: from $5 up to their score, or up to the most valuable clue on the
+    /// board if that's more
     fn dd_wager_range(&self, player_id: PlayerId) -> Option<WagerRange> {
-        if self.state != GameState::DailyDoubleWager || self.picker != Some(player_id) {
+        let daily_double = self.daily_double?;
+        if self.state != GameState::DailyDoubleWager
+            || daily_double.player != player_id
+            || daily_double.wager.is_some()
+        {
             return None;
         }
         let score = self
@@ -309,13 +359,13 @@ impl Room {
                 category_index,
                 question_index,
             } => {
-                if self.picker.is_none() {
+                let Some(picker) = self.picker else {
                     tracing::info!(
                         room_code = %self.code,
                         "Ignoring HostChoice before the host chose who picks first"
                     );
                     return RoomResponse::new();
-                }
+                };
                 let Some(question) = self
                     .current_categories()
                     .get(*category_index)
@@ -337,9 +387,13 @@ impl Room {
                 if daily_double {
                     tracing::info!(
                         room_code = %self.code,
-                        picker = ?self.picker,
+                        picker,
                         "Picker found a Daily Double"
                     );
+                    self.daily_double = Some(DailyDouble {
+                        player: picker,
+                        wager: None,
+                    });
                     self.state = GameState::DailyDoubleWager;
                 } else {
                     self.state = GameState::QuestionReading;
@@ -477,11 +531,13 @@ impl Room {
                 | GameState::DailyDoubleWager => true,
                 // Nobody else can answer a Daily Double, so the host may skip it while the
                 // picker answers. A normal clue goes back to buzzing after a wrong answer.
-                GameState::Answer => self.dd_wager.is_some(),
+                GameState::Answer => self.daily_double.is_some(),
                 _ => false,
             },
             GameCommand::SubmitWager { .. } => self.state == GameState::DailyDoubleWager,
             GameCommand::HostContinue => self.state == GameState::AnswerReveal,
+            // The picker can only be changed between clues. If the picker disconnects while
+            // wagering on a Daily Double, the host's only way on is to skip it.
             GameCommand::HostNextRound { .. } | GameCommand::HostSetPicker { .. } => {
                 self.state == GameState::Selection
             }
@@ -545,30 +601,37 @@ impl Room {
             question.answered = true;
         }
 
+        // Nobody is answering a skipped clue, including the picker on a Daily Double
+        self.current_buzzer = None;
         self.state = GameState::AnswerReveal;
 
         self.broadcast_state()
     }
 
-    /// Accepts the picker's wager on a Daily Double and has them answer it. Nobody buzzes
-    /// on a Daily Double.
+    /// Handles a player's wager in whichever phase is collecting one
     fn handle_submit_wager(&mut self, sender: Sender, amount: u32) -> RoomResponse {
         let Sender::Player(player_id) = sender else {
             return RoomResponse::new();
         };
+        match self.state {
+            GameState::DailyDoubleWager => self.handle_daily_double_wager(player_id, amount),
+            _ => RoomResponse::new(),
+        }
+    }
+
+    /// Accepts the wager on a Daily Double from the player who chose it, and has them
+    /// answer it. Nobody buzzes on a Daily Double.
+    fn handle_daily_double_wager(&mut self, player_id: PlayerId, amount: u32) -> RoomResponse {
         let Some(range) = self.dd_wager_range(player_id) else {
             tracing::info!(
                 room_code = %self.code,
                 player_id,
-                picker = ?self.picker,
-                "Rejecting a Daily Double wager from a player who isn't the picker"
+                daily_double = ?self.daily_double,
+                "Rejecting a Daily Double wager from a player who didn't choose it"
             );
-            return RoomResponse::to_player(
+            return reject(
                 player_id,
-                GameEvent::Rejected {
-                    reason: "Only the player who chose the Daily Double can wager on it"
-                        .to_string(),
-                },
+                "Only the player who chose the Daily Double can wager on it".to_string(),
             );
         };
         if !range.contains(amount) {
@@ -579,19 +642,14 @@ impl Room {
                 ?range,
                 "Rejecting a Daily Double wager out of range"
             );
-            return RoomResponse::to_player(
-                player_id,
-                GameEvent::Rejected {
-                    reason: format!(
-                        "Your wager must be between ${} and ${}",
-                        range.min, range.max
-                    ),
-                },
-            );
+            return reject(player_id, out_of_range_reason(range));
         }
 
         tracing::info!(room_code = %self.code, player_id, amount, "Daily Double wager");
-        self.dd_wager = Some(amount);
+        self.daily_double = Some(DailyDouble {
+            player: player_id,
+            wager: Some(amount),
+        });
         self.current_buzzer = Some(player_id);
         self.state = GameState::Answer;
         self.broadcast_state()
@@ -602,7 +660,7 @@ impl Room {
         self.current_question = None;
         self.current_buzzer = None;
         self.buzz_window = None;
-        self.dd_wager = None;
+        self.daily_double = None;
         for player in &mut self.players {
             player.player.buzzed = false;
         }
@@ -697,7 +755,7 @@ impl Room {
             return RoomResponse::new();
         };
         let stake = i32::try_from(stake).unwrap_or(i32::MAX);
-        let daily_double = self.dd_wager.is_some();
+        let daily_double = self.daily_double.is_some();
 
         if let Some(buzzer_id) = self.current_buzzer
             && let Some(player) = self.players.iter_mut().find(|p| p.player.pid == buzzer_id)
@@ -737,6 +795,19 @@ impl Room {
     fn has_remaining_questions(&self) -> bool {
         round_has_clues(self.current_categories())
     }
+}
+
+/// Tells one player why their command was refused
+fn reject(player_id: PlayerId, reason: String) -> RoomResponse {
+    RoomResponse::to_player(player_id, GameEvent::Rejected { reason })
+}
+
+/// Why a wager outside `range` was refused
+fn out_of_range_reason(range: WagerRange) -> String {
+    format!(
+        "Your wager must be between ${} and ${}",
+        range.min, range.max
+    )
 }
 
 /// Whether a round's board has any clues left to play
@@ -1833,7 +1904,12 @@ mod tests {
             TestCase {
                 name: "SubmitWager again while answering the Daily Double",
                 initial_state: GameState::Answer,
-                setup: |room| room.dd_wager = Some(200),
+                setup: |room| {
+                    room.daily_double = Some(DailyDouble {
+                        player: 1,
+                        wager: Some(200),
+                    })
+                },
                 command: GameCommand::SubmitWager { amount: 100 },
                 sender: Sender::Player(1),
             },
@@ -1869,14 +1945,18 @@ mod tests {
             room.picker = Some(1);
             (tc.setup)(&mut room);
             let picker = room.picker;
-            let dd_wager = room.dd_wager;
+            let daily_double = room.daily_double;
 
             let response = room.handle_command(&tc.command, tc.sender);
 
             assert_eq!(room.state, tc.initial_state, "{}: state changed", tc.name);
             assert!(is_empty(&response), "{}: response not empty", tc.name);
             assert_eq!(room.picker, picker, "{}: picker changed", tc.name);
-            assert_eq!(room.dd_wager, dd_wager, "{}: wager changed", tc.name);
+            assert_eq!(
+                room.daily_double, daily_double,
+                "{}: Daily Double changed",
+                tc.name
+            );
             assert_eq!(
                 room.current_question,
                 Some((0, 0)),
@@ -2765,7 +2845,13 @@ mod tests {
         assert_eq!(room.state, GameState::DailyDoubleWager);
         assert_eq!(room.current_question, Some((0, 1)));
         assert_eq!(room.current_buzzer, None);
-        assert_eq!(room.dd_wager, None);
+        assert_eq!(
+            room.daily_double,
+            Some(DailyDouble {
+                player: 1,
+                wager: None
+            })
+        );
         assert_eq!(
             player_wager_view(&response, 1),
             Some((
@@ -2862,7 +2948,7 @@ mod tests {
 
             if tc.accepted {
                 assert_eq!(room.state, GameState::Answer, "{}: state", tc.name);
-                assert_eq!(room.dd_wager, Some(tc.amount), "{}: wager", tc.name);
+                assert_eq!(room.dd_wager(), Some(tc.amount), "{}: wager", tc.name);
                 assert_eq!(room.current_buzzer, Some(1), "{}: answerer", tc.name);
                 assert!(room.buzz_window.is_none(), "{}: buzz window", tc.name);
                 assert_eq!(rejection(&response), None, "{}: rejected", tc.name);
@@ -2879,7 +2965,7 @@ mod tests {
                     "{}: state",
                     tc.name
                 );
-                assert_eq!(room.dd_wager, None, "{}: wager", tc.name);
+                assert_eq!(room.dd_wager(), None, "{}: wager", tc.name);
                 let (to, reason) = rejection(&response)
                     .unwrap_or_else(|| panic!("{}: wager should be rejected", tc.name));
                 assert_eq!(to, 1, "{}: rejection sent to the wrong player", tc.name);
@@ -2898,7 +2984,7 @@ mod tests {
 
         let response = wager(&mut room, 2, 100);
         assert_eq!(room.state, GameState::DailyDoubleWager);
-        assert_eq!(room.dd_wager, None);
+        assert_eq!(room.dd_wager(), None);
         let (to, _) = rejection(&response).expect("Sam's wager should be rejected");
         assert_eq!(to, 2, "Only Sam is told");
         assert_eq!(response.messages_to_specific.len(), 1);
@@ -2908,7 +2994,7 @@ mod tests {
         assert_eq!(room.state, GameState::DailyDoubleWager);
         wager(&mut room, 1, 300);
         assert_eq!(room.state, GameState::Answer);
-        assert_eq!(room.dd_wager, Some(300));
+        assert_eq!(room.dd_wager(), Some(300));
         assert_eq!(room.current_buzzer, Some(1));
     }
 
@@ -2960,7 +3046,7 @@ mod tests {
             );
             assert_eq!(room.picker, Some(1), "{}: picker", tc.name);
             assert_eq!(
-                room.dd_wager,
+                room.dd_wager(),
                 Some(300),
                 "{}: the wager is shown until the host moves on",
                 tc.name
@@ -2968,7 +3054,7 @@ mod tests {
 
             let response = room.handle_command(&GameCommand::HostContinue, Sender::Host);
             assert_eq!(room.state, GameState::Selection, "{}: state", tc.name);
-            assert_eq!(room.dd_wager, None, "{}: wager not cleared", tc.name);
+            assert_eq!(room.daily_double, None, "{}: not cleared", tc.name);
             assert_eq!(
                 player_wager_view(&response, 1),
                 Some((None, None, None)),
@@ -3001,10 +3087,11 @@ mod tests {
             assert_eq!(room.players[0].player.score, 500, "wagered: {wagered}");
             assert!(room.rounds[0][0].questions[1].answered);
             assert_eq!(room.picker, Some(1));
+            assert_eq!(room.current_buzzer, None, "wagered: {wagered}");
 
             room.handle_command(&GameCommand::HostContinue, Sender::Host);
             assert_eq!(room.state, GameState::Selection);
-            assert_eq!(room.dd_wager, None);
+            assert_eq!(room.daily_double, None);
         }
     }
 
@@ -3017,7 +3104,10 @@ mod tests {
         assert_eq!(room.current_stake(), Some(200));
 
         room.current_question = Some((0, 1));
-        room.dd_wager = Some(1234);
+        room.daily_double = Some(DailyDouble {
+            player: 1,
+            wager: Some(1234),
+        });
         assert_eq!(room.current_stake(), Some(1234));
     }
 

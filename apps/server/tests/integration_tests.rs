@@ -1179,7 +1179,7 @@ mod gameplay_tests {
             assert_eq!(get_player_score(&room_map, &room_code, sam_id), 700);
             assert_eq!(get_player_score(&room_map, &room_code, aj_id), 0);
             let room = room_map.get(&room_code).expect("Could not find room");
-            assert_eq!(room.dd_wager, None);
+            assert_eq!(room.daily_double, None);
         }
 
         // Clearing the board (+600 = 1300) starts Double Jeopardy, where AJ, in last place,
