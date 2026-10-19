@@ -1,26 +1,25 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use tokio_mpmc::Sender;
 
 use crate::{
     AppState, HostEntry, Player, PlayerId,
     api::{
         handlers::{AuthenticatedUser, WsQuery, perform_handshake},
-        messages::GameEvent,
+        messages::{GameEvent, Sender},
     },
     game::{GameState, room::Room},
     net::connection::{PlayerEntry, PlayerToken},
 };
 
 /// Performs authentication and sets up the session for a WebsocketConnection.
-/// Returns the player ID after successful authentication.
+/// Returns who the connection's commands come from after successful authentication.
 pub async fn setup_session(
     state: &Arc<AppState>,
     code: &str,
     query: &WsQuery,
-    tx: Sender<GameEvent>,
-) -> anyhow::Result<PlayerId> {
+    tx: tokio_mpmc::Sender<GameEvent>,
+) -> anyhow::Result<Sender> {
     let auth = {
         let room_map = state.room_map.lock().await;
         let room = room_map
@@ -29,24 +28,31 @@ pub async fn setup_session(
         perform_handshake(room, query)?
     };
 
-    let player_id = {
+    let sender = {
         let mut room_map = state.room_map.lock().await;
         let room = room_map
             .get_mut(code)
             .ok_or(anyhow!("Room {} not found", code))?;
 
         match auth {
-            AuthenticatedUser::Host => register_host(room, tx).await?,
-            AuthenticatedUser::ExistingPlayer { pid } => reconnect_player(room, pid, tx).await?,
-            AuthenticatedUser::NewPlayer { name } => register_new_player(room, name, tx).await?,
+            AuthenticatedUser::Host => {
+                register_host(room, tx).await?;
+                Sender::Host
+            }
+            AuthenticatedUser::ExistingPlayer { pid } => {
+                Sender::Player(reconnect_player(room, pid, tx).await?)
+            }
+            AuthenticatedUser::NewPlayer { name } => {
+                Sender::Player(register_new_player(room, name, tx).await?)
+            }
         }
     };
 
-    Ok(player_id)
+    Ok(sender)
 }
 
 /// Registers a host connection
-async fn register_host(room: &mut Room, tx: Sender<GameEvent>) -> anyhow::Result<PlayerId> {
+async fn register_host(room: &mut Room, tx: tokio_mpmc::Sender<GameEvent>) -> anyhow::Result<()> {
     tracing::info!("Registering host for room {}", room.code);
     room.host = Some(HostEntry::new(0, tx.clone()));
 
@@ -63,14 +69,14 @@ async fn register_host(room: &mut Room, tx: Sender<GameEvent>) -> anyhow::Result
         let _ = tx.send(room.build_game_state_msg()).await;
     }
 
-    Ok(0)
+    Ok(())
 }
 
 /// Reconnects an existing player
 async fn reconnect_player(
     room: &mut Room,
     pid: PlayerId,
-    tx: Sender<GameEvent>,
+    tx: tokio_mpmc::Sender<GameEvent>,
 ) -> anyhow::Result<PlayerId> {
     let p = room
         .players
@@ -101,7 +107,7 @@ async fn reconnect_player(
 async fn register_new_player(
     room: &mut Room,
     name: String,
-    tx: Sender<GameEvent>,
+    tx: tokio_mpmc::Sender<GameEvent>,
 ) -> anyhow::Result<PlayerId> {
     tracing::info!("Registering new player '{}' in room {}", name, room.code);
     let new_id = (room.players.len() + 1) as u32;

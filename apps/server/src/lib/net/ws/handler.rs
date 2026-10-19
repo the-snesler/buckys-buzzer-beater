@@ -16,7 +16,7 @@ use crate::{
     AppState,
     api::{
         handlers::{RoomParams, WsQuery},
-        messages::{GameCommand, GameEvent},
+        messages::{GameCommand, GameEvent, Sender},
     },
     game::{RoomResponse, room::BUZZ_WINDOW},
     net::ws::session::setup_session,
@@ -64,7 +64,7 @@ pub async fn ws_socket_handler(
     let (tx, rx) = tokio_mpmc::channel(20);
 
     tracing::info!("setting up session");
-    let player_id = setup_session(&state, &code, &query, tx.clone()).await?;
+    let sender = setup_session(&state, &code, &query, tx.clone()).await?;
 
     let self_tx = tx.clone();
 
@@ -86,7 +86,7 @@ pub async fn ws_socket_handler(
                     _ => break,
                 };
 
-                let cmd = match parse_message(msg, &code, player_id, &mut ws).await? {
+                let cmd = match parse_message(msg, &code, sender, &mut ws).await? {
                     Some(c) => c,
                     None => continue,
                 };
@@ -95,8 +95,8 @@ pub async fn ws_socket_handler(
                     let _ = self_tx.send(GameEvent::GotHeartbeat { hbid: *hbid }).await;
                 }
 
-                if cmd.should_witness() {
-                    handle_witness(&state, &code, &cmd, player_id).await;
+                if cmd.should_witness() && cmd.allowed_from(sender) {
+                    handle_witness(&state, &code, &cmd).await;
                 }
 
                 let response = {
@@ -104,7 +104,7 @@ pub async fn ws_socket_handler(
                     let room = room_map
                         .get_mut(&code)
                         .ok_or(anyhow!("Room lost"))?;
-                    let resp = room.handle_command(&cmd, Some(player_id));
+                    let resp = room.handle_command(&cmd, sender);
                     room.touch();
                     resp
                 };
@@ -129,7 +129,7 @@ pub async fn ws_socket_handler(
             }
         }
     }
-    tracing::info!("WebSocket handler ending normally for player {}", player_id);
+    tracing::info!(?sender, "WebSocket handler ending normally");
     Ok(())
 }
 
@@ -137,7 +137,7 @@ pub async fn ws_socket_handler(
 async fn parse_message(
     msg: Message,
     code: &str,
-    player_id: u32,
+    sender: Sender,
     ws: &mut WebSocket,
 ) -> anyhow::Result<Option<GameCommand>> {
     match msg {
@@ -148,7 +148,7 @@ async fn parse_message(
                 Err(e) => {
                     tracing::warn!(
                         room_code = %code,
-                        player_id = player_id,
+                        ?sender,
                         error = %e,
                         "Failed to parse GameCommand"
                     );
@@ -170,7 +170,7 @@ async fn parse_message(
 }
 
 /// Hanldes witness events for time-critical synchronization.
-async fn handle_witness(state: &Arc<AppState>, code: &str, cmd: &GameCommand, _player_id: u32) {
+async fn handle_witness(state: &Arc<AppState>, code: &str, cmd: &GameCommand) {
     let room_map = state.room_map.lock().await;
     if let Some(room) = room_map.get(code) {
         let witness_event = match cmd {

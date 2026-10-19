@@ -84,6 +84,47 @@ impl GameCommand {
     pub fn should_witness(&self) -> bool {
         matches!(self, Self::HostReady)
     }
+
+    /// Whether only the host may send this command. Every other command may only be
+    /// sent by a player.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use madhacks2025::api::messages::{GameCommand, Sender};
+    ///
+    /// let cmd = GameCommand::HostChecked { correct: true };
+    /// assert!(cmd.is_host_command());
+    /// assert!(cmd.allowed_from(Sender::Host));
+    /// assert!(!cmd.allowed_from(Sender::Player(1)));
+    /// ```
+    pub fn is_host_command(&self) -> bool {
+        match self {
+            Self::StartGame
+            | Self::EndGame
+            | Self::HostReady
+            | Self::HostChoice { .. }
+            | Self::HostChecked { .. }
+            | Self::HostSkip
+            | Self::HostContinue => true,
+            Self::Buzz { .. } | Self::Heartbeat { .. } | Self::LatencyOfHeartbeat { .. } => false,
+        }
+    }
+
+    /// Whether `sender`'s role is allowed to send this command
+    pub fn allowed_from(&self, sender: Sender) -> bool {
+        match sender {
+            Sender::Host => self.is_host_command(),
+            Sender::Player(_) => !self.is_host_command(),
+        }
+    }
+}
+
+/// Who sent a [`GameCommand`], as established by the WebSocket handshake
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Sender {
+    Host,
+    Player(PlayerId),
 }
 
 /// Events sent from server to clients.
@@ -150,7 +191,7 @@ pub enum GameEvent {
 #[cfg(test)]
 mod test {
     use crate::{
-        api::messages::{GameCommand, GameEvent},
+        api::messages::{GameCommand, GameEvent, Sender},
         game::GameState,
         net::connection::PlayerToken,
     };
@@ -453,6 +494,95 @@ mod test {
                 tc.name,
                 tc.should_witness,
                 tc.command.should_witness()
+            );
+        }
+    }
+
+    #[test]
+    fn test_command_roles() {
+        struct TestCase {
+            name: &'static str,
+            command: GameCommand,
+            host_command: bool,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "StartGame",
+                command: GameCommand::StartGame,
+                host_command: true,
+            },
+            TestCase {
+                name: "EndGame",
+                command: GameCommand::EndGame,
+                host_command: true,
+            },
+            TestCase {
+                name: "HostReady",
+                command: GameCommand::HostReady,
+                host_command: true,
+            },
+            TestCase {
+                name: "HostChoice",
+                command: GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index: 0,
+                },
+                host_command: true,
+            },
+            TestCase {
+                name: "HostChecked",
+                command: GameCommand::HostChecked { correct: true },
+                host_command: true,
+            },
+            TestCase {
+                name: "HostSkip",
+                command: GameCommand::HostSkip,
+                host_command: true,
+            },
+            TestCase {
+                name: "HostContinue",
+                command: GameCommand::HostContinue,
+                host_command: true,
+            },
+            TestCase {
+                name: "Buzz",
+                command: GameCommand::Buzz { reaction_ms: 120 },
+                host_command: false,
+            },
+            TestCase {
+                name: "Heartbeat",
+                command: GameCommand::Heartbeat {
+                    hbid: 1,
+                    t_dohb_recv: 0,
+                },
+                host_command: false,
+            },
+            TestCase {
+                name: "LatencyOfHeartbeat",
+                command: GameCommand::LatencyOfHeartbeat { hbid: 1, t_lat: 0 },
+                host_command: false,
+            },
+        ];
+
+        for tc in test_cases {
+            assert_eq!(
+                tc.command.is_host_command(),
+                tc.host_command,
+                "{}: wrong role",
+                tc.name
+            );
+            assert_eq!(
+                tc.command.allowed_from(Sender::Host),
+                tc.host_command,
+                "{}: allowed_from(Host)",
+                tc.name
+            );
+            assert_eq!(
+                tc.command.allowed_from(Sender::Player(1)),
+                !tc.host_command,
+                "{}: allowed_from(Player)",
+                tc.name
             );
         }
     }

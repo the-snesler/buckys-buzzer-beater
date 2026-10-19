@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     HostEntry, Player, PlayerEntry, PlayerId,
-    api::messages::{GameCommand, GameEvent},
+    api::messages::{GameCommand, GameEvent, Sender},
     game::{Category, GameState, RoomResponse},
     net::connection::{HostToken, RoomCode},
 };
@@ -172,11 +172,17 @@ impl Room {
         })
     }
 
-    pub fn handle_command(
-        &mut self,
-        cmd: &GameCommand,
-        sender_id: Option<PlayerId>,
-    ) -> RoomResponse {
+    pub fn handle_command(&mut self, cmd: &GameCommand, sender: Sender) -> RoomResponse {
+        if !cmd.allowed_from(sender) {
+            tracing::warn!(
+                room_code = %self.code,
+                ?sender,
+                ?cmd,
+                "Ignoring command not allowed from this sender"
+            );
+            return RoomResponse::new();
+        }
+
         match cmd {
             GameCommand::StartGame => {
                 self.state = GameState::Selection;
@@ -201,7 +207,7 @@ impl Room {
 
             GameCommand::Buzz { reaction_ms } => {
                 if self.state == GameState::WaitingForBuzz
-                    && let Some(player_id) = sender_id
+                    && let Sender::Player(player_id) = sender
                     && let Some(player_entry) =
                         self.players.iter().find(|p| p.player.pid == player_id)
                     && !player_entry.player.buzzed
@@ -243,8 +249,8 @@ impl Room {
             GameCommand::HostContinue => self.handle_host_continue(),
 
             GameCommand::Heartbeat { hbid, t_dohb_recv } => {
-                if let Some(sender_id) = sender_id
-                    && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
+                if let Sender::Player(player_id) = sender
+                    && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == player_id)
                 {
                     entry.on_know_dohb_recv(*hbid, *t_dohb_recv);
                 }
@@ -252,8 +258,8 @@ impl Room {
             }
 
             GameCommand::LatencyOfHeartbeat { hbid, t_lat } => {
-                if let Some(sender_id) = sender_id
-                    && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == sender_id)
+                if let Sender::Player(player_id) = sender
+                    && let Some(entry) = self.players.iter_mut().find(|p| p.player.pid == player_id)
                 {
                     let t_lat_u32 = (*t_lat).try_into().unwrap_or(u32::MAX);
                     entry.on_latencyhb(*hbid, t_lat_u32);
@@ -479,8 +485,8 @@ mod tests {
         room.current_buzzer = Some(1);
         room.categories[0].questions[0].answered = true;
 
-        room.handle_command(&GameCommand::HostChecked { correct: true }, None);
-        room.handle_command(&GameCommand::HostContinue, None);
+        room.handle_command(&GameCommand::HostChecked { correct: true }, Sender::Host);
+        room.handle_command(&GameCommand::HostContinue, Sender::Host);
 
         assert_eq!(room.state, GameState::GameEnd);
         assert_eq!(room.winner, Some(1), "Player 1 should be winner");
@@ -509,7 +515,7 @@ mod tests {
         room.players[0].player.score = 800;
         room.players[1].player.score = 200;
 
-        room.handle_command(&GameCommand::EndGame {}, None);
+        room.handle_command(&GameCommand::EndGame {}, Sender::Host);
 
         assert_eq!(room.state, GameState::GameEnd);
         assert_eq!(room.winner, Some(1));
@@ -540,7 +546,7 @@ mod tests {
             initial_state: GameState,
             setup: fn(&mut Room),
             command: GameCommand,
-            sender_id: Option<PlayerId>,
+            sender: Sender,
             expected_state: GameState,
             assertions: fn(&Room),
         }
@@ -551,7 +557,7 @@ mod tests {
                 initial_state: GameState::Start,
                 setup: |_| {},
                 command: GameCommand::StartGame {},
-                sender_id: None,
+                sender: Sender::Host,
                 expected_state: GameState::Selection,
                 assertions: |_| {},
             },
@@ -563,7 +569,7 @@ mod tests {
                     category_index: 0,
                     question_index: 0,
                 },
-                sender_id: None,
+                sender: Sender::Host,
                 expected_state: GameState::QuestionReading,
                 assertions: |room| {
                     assert_eq!(room.current_question, Some((0, 0)));
@@ -583,7 +589,7 @@ mod tests {
                     category_index: 0,
                     question_index: 0,
                 },
-                sender_id: None,
+                sender: Sender::Host,
                 expected_state: GameState::QuestionReading,
                 assertions: |room| {
                     assert!(!room.players[0].player.buzzed);
@@ -595,7 +601,7 @@ mod tests {
                 initial_state: GameState::QuestionReading,
                 setup: |_| {},
                 command: GameCommand::HostReady {},
-                sender_id: None,
+                sender: Sender::Host,
                 expected_state: GameState::WaitingForBuzz,
                 assertions: |_| {},
             },
@@ -606,7 +612,7 @@ mod tests {
                     add_test_player(room, 1, "AJ");
                 },
                 command: GameCommand::Buzz { reaction_ms: 200 },
-                sender_id: Some(1),
+                sender: Sender::Player(1),
                 expected_state: GameState::WaitingForBuzz,
                 assertions: |room| {
                     assert_eq!(room.current_buzzer, None);
@@ -622,7 +628,7 @@ mod tests {
                     room.players[0].player.buzzed = true;
                 },
                 command: GameCommand::Buzz { reaction_ms: 200 },
-                sender_id: Some(1),
+                sender: Sender::Player(1),
                 expected_state: GameState::WaitingForBuzz,
                 assertions: |room| {
                     assert_eq!(room.current_buzzer, None);
@@ -636,7 +642,7 @@ mod tests {
             room.state = tc.initial_state;
             (tc.setup)(&mut room);
 
-            room.handle_command(&tc.command, tc.sender_id);
+            room.handle_command(&tc.command, tc.sender);
 
             assert_eq!(
                 room.state, tc.expected_state,
@@ -731,11 +737,11 @@ mod tests {
                 &GameCommand::HostChecked {
                     correct: tc.correct,
                 },
-                None,
+                Sender::Host,
             );
 
             if room.state == GameState::AnswerReveal {
-                room.handle_command(&GameCommand::HostContinue, None);
+                room.handle_command(&GameCommand::HostContinue, Sender::Host);
             }
 
             assert_eq!(
@@ -764,7 +770,7 @@ mod tests {
         room.state = GameState::WaitingForBuzz;
         room.current_question = Some((0, 0));
 
-        room.handle_command(&GameCommand::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, Sender::Host);
 
         assert!(
             room.categories[0].questions[0].answered,
@@ -785,7 +791,7 @@ mod tests {
         room.state = GameState::WaitingForBuzz;
         room.current_question = Some((0, 0));
 
-        room.handle_command(&GameCommand::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -793,7 +799,7 @@ mod tests {
             "Should first go to AnswerReveal"
         );
 
-        room.handle_command(&GameCommand::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -815,7 +821,7 @@ mod tests {
         room.categories[0].questions[0].answered = true;
         room.current_question = Some((0, 1)); // Last question
 
-        room.handle_command(&GameCommand::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -823,7 +829,7 @@ mod tests {
             "Should first go to AnswerReveal"
         );
 
-        room.handle_command(&GameCommand::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -849,8 +855,8 @@ mod tests {
         room.players[1].player.buzzed = true;
         room.current_buzzer = Some(1);
 
-        room.handle_command(&GameCommand::HostSkip {}, None);
-        room.handle_command(&GameCommand::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, Sender::Host);
+        room.handle_command(&GameCommand::HostContinue {}, Sender::Host);
 
         assert!(
             !room.players[0].player.buzzed,
@@ -871,7 +877,7 @@ mod tests {
         room.current_question = Some((0, 0));
         room.players[0].player.score = 100;
 
-        room.handle_command(&GameCommand::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, Sender::Host);
 
         assert_eq!(
             room.players[0].player.score, 100,
@@ -886,7 +892,7 @@ mod tests {
         room.state = GameState::Selection;
         room.current_question = None;
 
-        let response = room.handle_command(&GameCommand::HostSkip {}, None);
+        let response = room.handle_command(&GameCommand::HostSkip {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -910,7 +916,7 @@ mod tests {
         room.current_buzzer = Some(1);
 
         // Host marks answer correct
-        room.handle_command(&GameCommand::HostChecked { correct: true }, None);
+        room.handle_command(&GameCommand::HostChecked { correct: true }, Sender::Host);
         assert_eq!(
             room.state,
             GameState::AnswerReveal,
@@ -919,7 +925,7 @@ mod tests {
         assert_eq!(room.players[0].player.score, 200, "Score should be updated");
 
         // Host continues
-        room.handle_command(&GameCommand::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -949,7 +955,7 @@ mod tests {
         room.players[1].player.buzzed = true; // All players have buzzed
 
         // Host marks answer incorrect
-        room.handle_command(&GameCommand::HostChecked { correct: false }, None);
+        room.handle_command(&GameCommand::HostChecked { correct: false }, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -962,7 +968,7 @@ mod tests {
         );
 
         // Host continues
-        room.handle_command(&GameCommand::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -981,7 +987,7 @@ mod tests {
         room.players[0].player.score = 100;
 
         // Host skips question
-        room.handle_command(&GameCommand::HostSkip {}, None);
+        room.handle_command(&GameCommand::HostSkip {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -998,7 +1004,7 @@ mod tests {
         );
 
         // Host continues
-        room.handle_command(&GameCommand::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -1022,7 +1028,7 @@ mod tests {
         room.current_buzzer = Some(1);
 
         // Host marks answer correct
-        room.handle_command(&GameCommand::HostChecked { correct: true }, None);
+        room.handle_command(&GameCommand::HostChecked { correct: true }, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -1031,7 +1037,7 @@ mod tests {
         );
 
         // Host continues from last question
-        room.handle_command(&GameCommand::HostContinue {}, None);
+        room.handle_command(&GameCommand::HostContinue {}, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -1054,7 +1060,7 @@ mod tests {
         room.players[1].player.buzzed = false; // Player 2 hasn't buzzed yet
 
         // Host marks answer incorrect
-        room.handle_command(&GameCommand::HostChecked { correct: false }, None);
+        room.handle_command(&GameCommand::HostChecked { correct: false }, Sender::Host);
 
         assert_eq!(
             room.state,
@@ -1072,8 +1078,107 @@ mod tests {
         );
     }
 
+    fn is_empty(response: &RoomResponse) -> bool {
+        response.messages_to_host.is_empty()
+            && response.messages_to_players.is_empty()
+            && response.messages_to_specific.is_empty()
+            && response.buzz_window_opened.is_none()
+    }
+
+    #[test]
+    fn test_commands_from_wrong_role_are_ignored() {
+        struct TestCase {
+            name: &'static str,
+            initial_state: GameState,
+            command: GameCommand,
+            sender: Sender,
+        }
+
+        let test_cases = vec![
+            TestCase {
+                name: "Player cannot start the game",
+                initial_state: GameState::Start,
+                command: GameCommand::StartGame,
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot end the game",
+                initial_state: GameState::Selection,
+                command: GameCommand::EndGame,
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot choose a question",
+                initial_state: GameState::Selection,
+                command: GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index: 0,
+                },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot open buzzing",
+                initial_state: GameState::QuestionReading,
+                command: GameCommand::HostReady,
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot judge their own answer",
+                initial_state: GameState::Answer,
+                command: GameCommand::HostChecked { correct: true },
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot skip a question",
+                initial_state: GameState::WaitingForBuzz,
+                command: GameCommand::HostSkip,
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Player cannot continue from the answer reveal",
+                initial_state: GameState::AnswerReveal,
+                command: GameCommand::HostContinue,
+                sender: Sender::Player(1),
+            },
+            TestCase {
+                name: "Host cannot buzz",
+                initial_state: GameState::WaitingForBuzz,
+                command: GameCommand::Buzz { reaction_ms: 100 },
+                sender: Sender::Host,
+            },
+        ];
+
+        for tc in test_cases {
+            let mut room = create_test_room();
+            add_test_player(&mut room, 1, "AJ");
+            room.state = tc.initial_state.clone();
+            room.current_question = Some((0, 0));
+            room.current_buzzer = Some(1);
+
+            let response = room.handle_command(&tc.command, tc.sender);
+
+            assert_eq!(room.state, tc.initial_state, "{}: state changed", tc.name);
+            assert!(is_empty(&response), "{}: response not empty", tc.name);
+            assert_eq!(
+                room.players[0].player.score, 0,
+                "{}: score changed",
+                tc.name
+            );
+            assert!(
+                !room.categories[0].questions[0].answered,
+                "{}: question marked answered",
+                tc.name
+            );
+            assert!(
+                room.buzz_window.is_none(),
+                "{}: buzz window opened",
+                tc.name
+            );
+        }
+    }
+
     fn buzz(room: &mut Room, pid: PlayerId, reaction_ms: u32) -> RoomResponse {
-        room.handle_command(&GameCommand::Buzz { reaction_ms }, Some(pid))
+        room.handle_command(&GameCommand::Buzz { reaction_ms }, Sender::Player(pid))
     }
 
     #[test]
@@ -1151,7 +1256,7 @@ mod tests {
         let id = buzz(&mut room, 1, 200)
             .buzz_window_opened
             .expect("Buzz should open a window");
-        room.handle_command(&GameCommand::HostSkip, None);
+        room.handle_command(&GameCommand::HostSkip, Sender::Host);
         room.resolve_buzz_window(id);
 
         assert_eq!(room.state, GameState::AnswerReveal);
