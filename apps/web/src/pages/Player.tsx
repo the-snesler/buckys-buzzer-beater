@@ -4,6 +4,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import type { GamePhase } from '../types/game';
 import type { WagerRange } from '../types/messages';
 import { formatMoney } from '../lib/money';
+import { isMuted, playSound, setMuted } from '../lib/sounds';
 
 // How long a player is locked out after pressing before the buzzer glows
 const LOCKOUT_MS = 250;
@@ -56,6 +57,7 @@ export default function Player() {
   const enabledAtRef = useRef<number | null>(null);
   const lockedUntilRef = useRef(0);
   const lockoutTimerRef = useRef<number | undefined>(undefined);
+  const [muted, setMutedState] = useState(isMuted);
 
   useEffect(() => () => window.clearTimeout(lockoutTimerRef.current), []);
 
@@ -181,6 +183,7 @@ export default function Player() {
     if (!canBuzz || enabledAt === null) {
       // Pressing before the buzzer glows locks you out, like on Jeopardy
       lockedUntilRef.current = pressedAt + LOCKOUT_MS;
+      playSound("lockout");
       setLockedOut(true);
       window.clearTimeout(lockoutTimerRef.current);
       lockoutTimerRef.current = window.setTimeout(() => setLockedOut(false), LOCKOUT_MS);
@@ -192,6 +195,17 @@ export default function Player() {
       reactionMs: Math.max(0, Math.round(pressedAt - enabledAt)),
     });
     setHasBuzzed(true);
+    playSound("buzz");
+  };
+
+  const myPick = phase === "selection" && myPid !== null && picker === myPid;
+  useEffect(() => {
+    if (myPick) playSound("yourPick");
+  }, [myPick]);
+
+  const toggleMuted = () => {
+    setMuted(!muted);
+    setMutedState(!muted);
   };
 
   const glowing = canBuzz && !hasBuzzed && !lockedOut;
@@ -268,12 +282,22 @@ export default function Player() {
               </button>
             )}
             <h1 className="text-xl font-bold text-white">Room: {code}</h1>
-            <div
-              className={`px-2 py-1 rounded text-xs ${
-                isConnected ? "bg-green-600" : "bg-red-600"
-              } text-white`}
-            >
-              {isConnected ? "●" : "○"}
+            <div className="flex gap-2 items-center">
+              <button
+                onClick={toggleMuted}
+                aria-pressed={!muted}
+                aria-label={muted ? "Turn sound on" : "Turn sound off"}
+                className="px-2 py-1 bg-gray-700 text-white rounded text-xs hover:bg-gray-600"
+              >
+                {muted ? "🔇" : "🔊"}
+              </button>
+              <div
+                className={`px-2 py-1 rounded text-xs ${
+                  isConnected ? "bg-green-600" : "bg-red-600"
+                } text-white`}
+              >
+                {isConnected ? "●" : "○"}
+              </div>
             </div>
           </div>
           <div
@@ -309,7 +333,7 @@ export default function Player() {
           </div>
         )}
 
-        {phase === "selection" && myPid !== null && picker === myPid && (
+        {myPick && (
           <div className="bg-yellow-500 rounded-lg p-4 mb-4 text-center">
             <p className="text-2xl font-black text-gray-900">Your pick!</p>
             <p className="text-gray-900">Tell the host which clue you want.</p>

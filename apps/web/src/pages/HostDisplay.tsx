@@ -2,10 +2,14 @@ import { useParams } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
 import React from "react";
 import { QRCodeSVG } from "qrcode.react";
-import type { GameState, Player } from "../types/game";
+import type { GamePhase, GameState, Player } from "../types/game";
 import { roundName } from "../lib/rounds";
 import { formatMoney } from "../lib/money";
 import { allJudged } from "../lib/finalJeopardy";
+import { playOnStage, type SoundName } from "../lib/sounds";
+
+/** The countdown ticks for each of its last seconds */
+const FINAL_TICK_SECONDS = 5;
 
 /** How long the banner announcing a new round covers the board */
 const ROUND_BANNER_MS = 4000;
@@ -31,6 +35,11 @@ function FinalCountdown() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (remaining === 0) playOnStage("timesUp");
+    else if (remaining <= FINAL_TICK_SECONDS) playOnStage("tick");
+  }, [remaining]);
+
   return (
     <div className="w-full max-w-3xl">
       <div className="h-4 rounded-full bg-white/20 overflow-hidden">
@@ -47,7 +56,47 @@ function FinalCountdown() {
 interface DisplayMessage {
   gameState: GameState | null;
   buzzedPlayer: { pid: number; name: string } | null;
-  playerList: Player[];
+  // Missing from the message sent as the window opens
+  playerList?: Player[];
+}
+
+/** The sound the room hears when the display changes from `prev` to `next`, if any */
+function transitionSound(prev: DisplayMessage, next: DisplayMessage): SoundName | null {
+  const before = prev.gameState;
+  const after = next.gameState;
+  if (!after) {
+    return (next.playerList?.length ?? 0) > (prev.playerList?.length ?? 0) ? "join" : null;
+  }
+  // The game just started
+  if (!before) return "boardFill";
+
+  const entered = (phase: GamePhase) => after.state === phase && before.state !== phase;
+  if (entered("finalWager")) return "finalJeopardy";
+  if (entered("gameEnd")) return "gameOver";
+  if (after.round > before.round) return "boardFill";
+  if (entered("dailyDoubleWager")) return "dailyDouble";
+  if (entered("questionReading")) return "reveal";
+  if (next.buzzedPlayer && !prev.buzzedPlayer) return "buzzIn";
+
+  // The host judged the response being answered
+  if (before.state === "answer" && before.currentBuzzer !== null) {
+    const score = (state: GameState) =>
+      state.players.find((p) => p.pid === before.currentBuzzer)?.score ?? 0;
+    if (score(after) > score(before)) return "correct";
+    if (score(after) < score(before)) return "incorrect";
+  }
+  if (before.state === "waitingForBuzz" && after.state === "answerReveal") return "timesUp";
+
+  // A Final Jeopardy response was revealed or judged
+  for (const entry of after.final?.entries ?? []) {
+    const old = before.final?.entries.find((e) => e.pid === entry.pid);
+    if (!old) continue;
+    if (old.correct === null && entry.correct !== null) {
+      return entry.correct ? "correct" : "incorrect";
+    }
+    if (!old.revealed && entry.revealed) return "reveal";
+  }
+  return null;
 }
 
 export default function HostDisplay() {
@@ -60,6 +109,8 @@ export default function HostDisplay() {
   const [playerList, setPlayerList] = useState<Player[]>([]);
   const [roundBanner, setRoundBanner] = useState<number | null>(null);
   const lastRoundRef = useRef<number | null>(null);
+  // The last message from the host, null until the first one
+  const lastMessageRef = useRef<DisplayMessage | null>(null);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent<DisplayMessage>) => {
@@ -70,6 +121,11 @@ export default function HostDisplay() {
         typeof event.data === "object" &&
         "gameState" in event.data
       ) {
+        const previous = lastMessageRef.current;
+        lastMessageRef.current = event.data;
+        // Nothing has changed yet when the display opens, so it makes no sound until then
+        const sound = previous && transitionSound(previous, event.data);
+        if (sound) playOnStage(sound);
         setGameState(event.data.gameState);
         setBuzzedPlayer(event.data.buzzedPlayer);
         setPlayerList(event.data.playerList || []);
