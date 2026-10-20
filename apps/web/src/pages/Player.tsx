@@ -50,8 +50,6 @@ export default function Player() {
   // server's copy never replaces what they typed, so it can't move the cursor or undo an
   // edit that crossed an autosave.
   const answerTouchedRef = useRef(false);
-  // The last response autosaved, so the same text is never autosaved twice
-  const lastAutosaveRef = useRef<string | null>(null);
   // Whether the clue being played is a Daily Double. Players are only told while the
   // picker wagers, so this carries it on through the answer.
   const [dailyDoubleInPlay, setDailyDoubleInPlay] = useState(false);
@@ -141,7 +139,6 @@ export default function Player() {
           ) {
             setAnswerDraft("");
             answerTouchedRef.current = false;
-            lastAutosaveRef.current = null;
           }
           if (message.state === "dailyDoubleWager") {
             setDailyDoubleInPlay(true);
@@ -239,20 +236,18 @@ export default function Player() {
   // Save the response shortly after the player stops typing, so an edit they never
   // submitted isn't lost when the host locks the responses
   useEffect(() => {
-    if (phase !== "finalAnswer" || !canAnswer || !answerTouchedRef.current) return;
+    if (!isConnected || phase !== "finalAnswer" || !canAnswer || !answerTouchedRef.current) return;
     const trimmed = answerDraft.trim();
-    if (
-      trimmed === (pendingAnswer ?? answer ?? "") ||
-      trimmed === lastAutosaveRef.current
-    ) {
+    // Only deduplicate against pending or acknowledged text. PlayerState clears pending
+    // sends after reconnect, so a response lost with the connection can be sent again.
+    if (trimmed === (pendingAnswer ?? answer ?? "")) {
       return;
     }
     const timer = window.setTimeout(() => {
-      lastAutosaveRef.current = trimmed;
       sendAnswer(trimmed);
     }, ANSWER_AUTOSAVE_MS);
     return () => window.clearTimeout(timer);
-  }, [answerDraft, answer, pendingAnswer, phase, canAnswer]);
+  }, [answerDraft, answer, pendingAnswer, phase, canAnswer, isConnected]);
 
   const finalWager = phase === "finalWager";
   // The wager the server has, and the one typed, are the same, so there's nothing to send
