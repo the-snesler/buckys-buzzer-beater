@@ -6,26 +6,26 @@
                 "clues": [
                     {
                         "value": 200,
-                        "clue": "This infamous local personality became a campus legend dwelling in the university's underground tunnel system.",
-                        "solution": "Who is Tunnel Bob (Robert Gruenenwald)?"
+                        "clue": "\"Bucky\" is short for this full first name.",
+                        "solution": "What is Buckingham?"
                     },
                     {
                         "value": 400,
-                        "clue": "The last time the Badgers went to the Rose Bowl.",
-                        "solution": "What is 2020?"
+                        "clue": "This lakeshore residence hall is named for the Ho-Chunk word for the Madison area, meaning \"four lakes.\"",
+                        "solution": "What is Dejope Hall?"
                     },
                     {
                         "value": 600,
-                        "clue": "The only library on campus that requires a wiscard to enter.",
-                        "solution": "What is Memorial Library?"
+                        "clue": "The Memorial Union Terrace sunburst chairs come in Union Orange, Lakeshore Green, and this third color.",
+                        "solution": "What is (Sunburst) Yellow?"
                     },
                     {
                         "value": 800,
-                        "clue": "With multiple national championships, this UW-Madison program stands as the school's most successful NCAA sport.",
+                        "clue": "This UW-Madison program stands as the school's most successful NCAA sport by NCAA championships.",
                         "solution": "What is Women's Hockey?"
                     },
                     {
-                        "value": 2000,
+                        "value": 1000,
                         "clue": "The current chair of the Computer Sciences department.",
                         "solution": "Who is Paul Barford?"
                     }
@@ -46,8 +46,8 @@
                     },
                     {
                         "value": 600,
-                        "clue": "This greedy algorithm is used to find the minimum spanning tree of a connected, undirected graph.",
-                        "solution": "What is Kruskal's Algorithm?"
+                        "clue": "This set structure can give false positives but never false negatives.",
+                        "solution": "What is a Bloom filter?"
                     },
                     {
                         "value": 800,
@@ -55,7 +55,7 @@
                         "solution": "What is A-star?"
                     },
                     {
-                        "value": 2000,
+                        "value": 1000,
                         "clue": "This is the term for extending the size of a hashset and changing the key matches.",
                         "solution": "What is rehash?"
                     }
@@ -85,9 +85,9 @@
                         "solution": "What is Amazon Web Services (AWS)?"
                     },
                     {
-                        "value": 2000,
-                        "clue": "Unlike full VMs, these lightweight virtualized environments share an operating system kernel with their host.",
-                        "solution": "What are containers?"
+                        "value": 1000,
+                        "clue": "In 2024, a Microsoft engineer noticed SSH logins were about half a second slow, and uncovered a backdoor in this compression library.",
+                        "solution": "What is xz (liblzma)?"
                     }
                 ]
             },
@@ -101,8 +101,8 @@
                     },
                     {
                         "value": 400,
-                        "clue": "Developed in just 10 days by Brendan Eich at Netscape in 1995, this scripting language was originally called Mocha before becoming the cornerstone of web interactivity.",
-                        "solution": "What is JavaScript?"
+                        "clue": "JetBrains named this JVM language after an island near St. Petersburg, just as Java is named after an island.",
+                        "solution": "What is Kotlin?"
                     },
                     {
                         "value": 600,
@@ -115,39 +115,39 @@
                         "solution": "What is OCaml?"
                     },
                     {
-                        "value": 2000,
+                        "value": 1000,
                         "clue": "Developed at Bell Labs in 1969 by Ken Thompson, this short-lived language served as the direct predecessor to C.",
                         "solution": "What is B?"
                     }
                 ]
             },
             {
-                "category": "Famous Firsts",
+                "category": "Expand the Acronym",
                 "clues": [
                     {
                         "value": 200,
-                        "clue": "The first video uploaded to this site was titled \"Me at the zoo\" and featured co-founder Jawed Karim.",
-                        "solution": "What is YouTube?"
+                        "clue": "GNU",
+                        "solution": "What is \"GNU's Not Unix\"?"
                     },
                     {
                         "value": 400,
-                        "clue": "In 1995, Amazon sold its first item, which was one of these physical objects.",
-                        "solution": "What is a book?"
+                        "clue": "WINE",
+                        "solution": "What is \"Wine Is Not an Emulator\"?"
                     },
                     {
                         "value": 600,
-                        "clue": "The first SMS text message ever sent wished the receiver a Merry this.",
-                        "solution": "What is Christmas?"
+                        "clue": "BASIC",
+                        "solution": "What is \"Beginner's All-purpose Symbolic Instruction Code\"?"
                     },
                     {
                         "value": 800,
-                        "clue": "The first computer mouse, invented by Douglas Engelbart in 1964, was carved from this material.",
-                        "solution": "What is wood?"
+                        "clue": "CAPTCHA",
+                        "solution": "What is \"Completely Automated Public Turing test to tell Computers and Humans Apart\"?"
                     },
                     {
-                        "value": 2000,
-                        "clue": "Grace Hopper popularized the term \"debugging\" after finding one of these insects trapped in a relay of the Harvard Mark II computer.",
-                        "solution": "What is a moth?"
+                        "value": 1000,
+                        "clue": "TWAIN, the scanner standard that officially isn't an acronym but is jokingly expanded this way",
+                        "solution": "What is \"Technology Without An Interesting Name\"?"
                     }
                 ]
             },
@@ -156,26 +156,26 @@
                 "clues": [
                     {
                         "value": 200,
-                        "clue": "Under U.S. legislation threatening a ban unless its China-based owner divests, this short-video platform's American operations are set to be acquired by which company?",
-                        "solution": "What is Oracle?"
+                        "clue": "Microsoft shut down this 22-year-old calling service in 2025 and moved its users to Teams.",
+                        "solution": "What is Skype?"
                     },
                     {
                         "value": 400,
-                        "clue": "With thousands of satellites in low Earth orbit, this network expanded global broadband and began testing direct-to-cell service with carriers.",
-                        "solution": "What is Starlink?"
+                        "clue": "Blizzard dropped the \"2\" from this hero shooter's name in February 2026.",
+                        "solution": "What is Overwatch?"
                     },
                     {
                         "value": 600,
-                        "clue": "To cut e-waste and standardize charging, the EU mandated that most new phones, tablets, and small electronics sold after late 2024 use this connector.",
-                        "solution": "What is USB-C?"
+                        "clue": "On Oct. 11, 2026, this NASA rover passed Opportunity's 28.06-mile record for distance driven on another world.",
+                        "solution": "What is Perseverance?"
                     },
                     {
                         "value": 800,
-                        "clue": "This Bay Area company recently admitted to running over the \"Mayor of 16th street\", KitKat (rip).",
+                        "clue": "This Bay Area company admitted to running over the \"Mayor of 16th street\", KitKat.",
                         "solution": "What is Waymo?"
                     },
                     {
-                        "value": 2000,
+                        "value": 1000,
                         "clue": "This Himalayan nation launched an official Discord server to share updates, gather feedback, and engage citizens.",
                         "solution": "What is Nepal?"
                     }
