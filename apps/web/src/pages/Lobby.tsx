@@ -1,11 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
-import { createRoom, type Category } from '../lib/api';
-
-interface LocationState {
-  categories?: Category[];
-  fromBuilder?: boolean;
-}
+import { createRoom } from '../lib/api';
+import { describeGame, parseGameFile, toServerCategories, type ParsedGame } from '../lib/gameFile';
+import { draftHasContent, loadBuilderDraft } from '../lib/builderDraft';
+import type { BuilderLocationState, LobbyLocationState } from '../types/navigation';
 
 export default function Lobby() {
   const navigate = useNavigate();
@@ -15,15 +13,16 @@ export default function Lobby() {
   const [playerName, setPlayerName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [categories, setCategories] = useState<Category[] | null>(null);
+  const [game, setGame] = useState<ParsedGame | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fromBuilder, setFromBuilder] = useState(false);
+  const [randomDailyDoubles, setRandomDailyDoubles] = useState(false);
 
-  // Load categories from navigation state (from GameBuilder)
+  // Load the game from navigation state (from GameBuilder)
   useEffect(() => {
-    const state = location.state as LocationState | null;
-    if (state?.categories && state?.fromBuilder) {
-      setCategories(state.categories);
+    const state = location.state as LobbyLocationState | null;
+    if (state?.game && state?.fromBuilder) {
+      setGame(state.game);
       setFromBuilder(true);
       setFileName(null);
       // Clear navigation state to prevent reloading on refresh
@@ -45,17 +44,7 @@ export default function Lobby() {
       const response = await fetch('/formatted_game.json');
       const json = await response.json();
 
-      const transformed: Category[] = json.game.single.map((cat: { category: string; clues: { value: number; clue: string; solution: string }[] }) => ({
-        title: cat.category,
-        questions: cat.clues.map((clue) => ({
-          question: clue.clue,
-          answer: clue.solution,
-          value: clue.value,
-          answered: false,
-        })),
-      }));
-
-      setCategories(transformed);
+      setGame(parseGameFile(json));
       setFileName('Default Game');
       setFromBuilder(false);
     } catch (err) {
@@ -75,41 +64,32 @@ export default function Lobby() {
     reader.onload = (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
-
-        // Validate structure
-        if (!json.game?.single || !Array.isArray(json.game.single)) {
-          throw new Error("Invalid format: expected game.single array");
-        }
-
-        // Transform to Category[] format
-        const transformed: Category[] = json.game.single.map((cat: { category: string; clues: { value: number; clue: string; solution: string }[] }) => {
-          if (!cat.category || !Array.isArray(cat.clues)) {
-            throw new Error("Invalid category format");
-          }
-
-          return {
-            title: cat.category,
-            questions: cat.clues.map((clue) => {
-              if (typeof clue.value !== 'number' || !clue.clue || !clue.solution) {
-                throw new Error("Invalid clue format");
-              }
-              return {
-                question: clue.clue,
-                answer: clue.solution,
-                value: clue.value,
-                answered: false,
-              };
-            }),
-          };
-        });
-
-        setCategories(transformed);
+        setGame(parseGameFile(json));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Invalid JSON file");
-        setCategories(null);
+        setGame(null);
       }
     };
     reader.readAsText(file);
+  };
+
+  // A game from the builder is already its draft. Any other game replaces the draft.
+  const editInBuilder = () => {
+    if (!game) return;
+    if (fromBuilder) {
+      navigate('/create');
+      return;
+    }
+    const draft = loadBuilderDraft();
+    if (
+      draft &&
+      draftHasContent(draft) &&
+      !window.confirm('Replace the game in the Game Builder with this one?')
+    ) {
+      return;
+    }
+    const state: BuilderLocationState = { game };
+    navigate('/create', { state });
   };
 
   const handleJoin = (e: React.FormEvent) => {
@@ -121,12 +101,15 @@ export default function Lobby() {
   };
 
   const handleCreate = async () => {
-    if (!categories) return;
+    if (!game) return;
     setIsCreating(true);
     setError(null);
     try {
       const { roomCode, hostToken } = await createRoom({
-        categories,
+        categories: toServerCategories(game.single),
+        doubleCategories: toServerCategories(game.double),
+        randomDailyDoubles,
+        final: game.final,
       });
       // Store host token for WebSocket auth
       sessionStorage.setItem(`host_token_${roomCode}`, hostToken);
@@ -270,22 +253,54 @@ export default function Lobby() {
               className="w-full px-4 py-4 rounded-xl bg-stone-800 text-white border-2 border-stone-600 focus:border-red-400 focus:outline-none transition-all file:mr-4 file:py-2 file:px-6 file:rounded-lg file:border-0 file:bg-red-600 file:text-white file:font-bold file:cursor-pointer file:hover:bg-red-700 file:transition-colors"
             />
 
-            {categories && (
+            {game && (
               <div className="mt-3 flex items-center gap-2 text-green-300 bg-green-900/30 border-2 border-green-700 rounded-lg px-4 py-3">
                 <span className="text-xl flex-shrink-0">✓</span>
                 <p className="font-semibold break-words">
-                  Loaded {categories.length} categories from{" "}
+                  Loaded {describeGame(game)} from{" "}
                   <span className="font-black break-all">
                     {fromBuilder ? "Game Builder" : fileName}
                   </span>
+                  {" "}
+                  <button
+                    type="button"
+                    onClick={editInBuilder}
+                    className="text-green-200 hover:text-white underline decoration-2 underline-offset-2 transition-colors"
+                  >
+                    Edit
+                  </button>
                 </p>
               </div>
             )}
+
+            {game && game.warnings.length > 0 && (
+              <ul className="mt-2 space-y-1 text-yellow-200 bg-yellow-900/30 border-2 border-yellow-700 rounded-lg px-4 py-3 text-sm font-semibold break-words">
+                {game.warnings.map((warning) => (
+                  <li key={warning}>⚠ {warning}</li>
+                ))}
+              </ul>
+            )}
+
+            <label className="mt-4 flex items-start gap-3 text-white cursor-pointer">
+              <input
+                type="checkbox"
+                checked={randomDailyDoubles}
+                onChange={(e) => setRandomDailyDoubles(e.target.checked)}
+                className="mt-1 w-5 h-5 accent-red-600"
+              />
+              <span>
+                <span className="font-bold">Randomly place Daily Doubles</span>
+                <span className="block text-sm text-stone-400">
+                  Hides 1 in Jeopardy and 2 in Double Jeopardy, in rounds where the game has
+                  none of its own. Nobody, not even the host, can see where they are.
+                </span>
+              </span>
+            </label>
           </div>
 
           <button
             onClick={handleCreate}
-            disabled={isCreating || !categories}
+            disabled={isCreating || !game}
             className="w-full py-5 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-xl font-black text-xl uppercase tracking-wider shadow-lg hover:shadow-2xl hover:from-green-700 hover:to-green-800 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 transform hover:scale-105 transition-all duration-200 border-b-4 border-green-900 active:border-b-0 active:mt-1 flex items-center justify-center gap-3"
             style={{ fontFamily: 'Impact, "Arial Black", sans-serif' }}
           >

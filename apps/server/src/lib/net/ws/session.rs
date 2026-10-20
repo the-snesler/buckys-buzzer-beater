@@ -1,26 +1,25 @@
 use std::sync::Arc;
 
 use anyhow::anyhow;
-use tokio_mpmc::Sender;
 
 use crate::{
     AppState, HostEntry, Player, PlayerId,
     api::{
         handlers::{AuthenticatedUser, WsQuery, perform_handshake},
-        messages::GameEvent,
+        messages::{GameEvent, Sender},
     },
     game::{GameState, room::Room},
-    net::connection::{PlayerEntry, PlayerToken},
+    net::connection::{EventSender, PlayerEntry, PlayerToken, send_event},
 };
 
 /// Performs authentication and sets up the session for a WebsocketConnection.
-/// Returns the player ID after successful authentication.
+/// Returns who the connection's commands come from after successful authentication.
 pub async fn setup_session(
     state: &Arc<AppState>,
     code: &str,
     query: &WsQuery,
-    tx: Sender<GameEvent>,
-) -> anyhow::Result<PlayerId> {
+    tx: EventSender,
+) -> anyhow::Result<Sender> {
     let auth = {
         let room_map = state.room_map.lock().await;
         let room = room_map
@@ -29,24 +28,31 @@ pub async fn setup_session(
         perform_handshake(room, query)?
     };
 
-    let player_id = {
+    let sender = {
         let mut room_map = state.room_map.lock().await;
         let room = room_map
             .get_mut(code)
             .ok_or(anyhow!("Room {} not found", code))?;
 
         match auth {
-            AuthenticatedUser::Host => register_host(room, tx).await?,
-            AuthenticatedUser::ExistingPlayer { pid } => reconnect_player(room, pid, tx).await?,
-            AuthenticatedUser::NewPlayer { name } => register_new_player(room, name, tx).await?,
+            AuthenticatedUser::Host => {
+                register_host(room, tx);
+                Sender::Host
+            }
+            AuthenticatedUser::ExistingPlayer { pid } => {
+                Sender::Player(reconnect_player(room, pid, tx)?)
+            }
+            AuthenticatedUser::NewPlayer { name } => {
+                Sender::Player(register_new_player(room, name, tx))
+            }
         }
     };
 
-    Ok(player_id)
+    Ok(sender)
 }
 
 /// Registers a host connection
-async fn register_host(room: &mut Room, tx: Sender<GameEvent>) -> anyhow::Result<PlayerId> {
+fn register_host(room: &mut Room, tx: EventSender) {
     tracing::info!("Registering host for room {}", room.code);
     room.host = Some(HostEntry::new(0, tx.clone()));
 
@@ -57,21 +63,15 @@ async fn register_host(room: &mut Room, tx: Sender<GameEvent>) -> anyhow::Result
         "Sending player list to host: {} players",
         room.players.len()
     );
-    let _ = tx.send(player_list).await;
+    send_event(&tx, player_list);
 
     if room.state != GameState::Start {
-        let _ = tx.send(room.build_game_state_msg()).await;
+        send_event(&tx, room.build_game_state_msg());
     }
-
-    Ok(0)
 }
 
 /// Reconnects an existing player
-async fn reconnect_player(
-    room: &mut Room,
-    pid: PlayerId,
-    tx: Sender<GameEvent>,
-) -> anyhow::Result<PlayerId> {
+fn reconnect_player(room: &mut Room, pid: PlayerId, tx: EventSender) -> anyhow::Result<PlayerId> {
     let p = room
         .players
         .iter_mut()
@@ -80,29 +80,12 @@ async fn reconnect_player(
 
     p.sender = tx.clone();
 
-    // Always send player state on reconnect
-    let can_buzz = room.state == GameState::WaitingForBuzz && !p.player.buzzed;
-    let player_state = GameEvent::PlayerState {
-        pid: p.player.pid,
-        buzzed: p.player.buzzed,
-        score: p.player.score,
-        can_buzz,
-    };
-    let _ = tx.send(player_state).await;
-
-    // Also send game state if game has started
-    if room.state != GameState::Start {
-        let _ = tx.send(room.build_game_state_msg()).await;
-    }
+    send_player_view(room, pid, &tx);
     Ok(pid)
 }
 
 /// Registers a new player to the room
-async fn register_new_player(
-    room: &mut Room,
-    name: String,
-    tx: Sender<GameEvent>,
-) -> anyhow::Result<PlayerId> {
+fn register_new_player(room: &mut Room, name: String, tx: EventSender) -> PlayerId {
     tracing::info!("Registering new player '{}' in room {}", name, room.code);
     let new_id = (room.players.len() + 1) as u32;
     let token = PlayerToken::generate();
@@ -111,52 +94,38 @@ async fn register_new_player(
         tx.clone(),
     );
     tracing::info!(
-        "Broadcasting new player {} to {} existing players and host",
+        "Notifying host of new player {} ({} existing players)",
         &player.player.pid,
         room.players.len()
     );
-    room.players.push(player);
+    room.add_player(player);
 
-    tx.send(GameEvent::NewPlayer { pid: new_id, token }).await?;
-    let can_buzz = room.state == GameState::WaitingForBuzz;
-    let player_state = GameEvent::PlayerState {
-        pid: new_id,
-        buzzed: false,
-        score: 0,
-        can_buzz,
-    };
-    let _ = tx.send(player_state).await;
-
-    if room.state != GameState::Start {
-        let _ = tx.send(room.build_game_state_msg()).await;
-
-        let game_state = room.build_game_state_msg();
-        if let Some(host) = &room.host {
-            let _ = host.sender.send(game_state.clone()).await;
-        }
-        for player in &room.players {
-            if player.player.pid != new_id {
-                let _ = player.sender.send(game_state.clone()).await;
-            }
-        }
-    } else if let Some(host) = &room.host {
-        let _ = send_player_list_to_host(host, &room.players).await;
-    }
+    send_event(&tx, GameEvent::NewPlayer { pid: new_id, token });
+    send_player_view(room, new_id, &tx);
 
     if let Some(host) = &room.host {
-        let _ = send_player_list_to_host(host, &room.players).await;
+        if room.state != GameState::Start {
+            send_event(&host.sender, room.build_game_state_msg());
+        }
+        send_player_list_to_host(host, &room.players);
     }
 
-    Ok(new_id)
+    new_id
+}
+
+/// Sends a player the public state once the game has started, then their own state. This
+/// is the same order as a broadcast, so the player's own state wins.
+fn send_player_view(room: &Room, pid: PlayerId, tx: &EventSender) {
+    if room.state != GameState::Start {
+        send_event(tx, room.build_public_state_msg());
+    }
+    if let Some(player_state) = room.build_player_state_msg(pid) {
+        send_event(tx, player_state);
+    }
 }
 
 /// Sends the current player list to the host
-pub async fn send_player_list_to_host(
-    host: &HostEntry,
-    players: &[PlayerEntry],
-) -> anyhow::Result<()> {
+pub fn send_player_list_to_host(host: &HostEntry, players: &[PlayerEntry]) {
     let list: Vec<Player> = players.iter().map(|entry| entry.player.clone()).collect();
-    let msg = GameEvent::PlayerList { players: list };
-    host.sender.send(msg).await?;
-    Ok(())
+    send_event(&host.sender, GameEvent::PlayerList { players: list });
 }

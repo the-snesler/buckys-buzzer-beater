@@ -68,7 +68,11 @@ mod smoke_tests {
 }
 
 mod gameplay_tests {
-    use madhacks2025::{game::GameState, net::connection::PlayerEntry};
+    use madhacks2025::{
+        api::messages::{FinalView, WagerRange},
+        game::GameState,
+        net::connection::PlayerEntry,
+    };
 
     use super::*;
 
@@ -157,6 +161,7 @@ mod gameplay_tests {
     async fn test_game_flow_start_to_buzz() {
         let (_server, port, state) = start_test_server().await;
         let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
 
         let host_token = {
             let room_map = state.room_map.lock().await;
@@ -173,16 +178,23 @@ mod gameplay_tests {
         let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
         let _ = recv_msgs(&mut host_ws).await; // Consume host update
 
-        start_game(&mut host_ws, &mut [&mut player_ws]).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
 
-        let start_msgs = send_cmd_and_recv_all(&mut host_ws, &GameCommand::StartGame {}).await;
-        println!("After StartGame, host got: {:?}", start_msgs);
+        send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 0,
+            },
+        )
+        .await;
+        let _ = recv_msgs(&mut player_ws).await;
 
         send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostReady {}).await;
         let player_update = recv_msgs(&mut player_ws).await;
 
         let buzz_state = player_update.iter().find(|m| {
-            if let GameEvent::GameState { state, .. } = m {
+            if let GameEvent::PublicState { state, .. } = m {
                 matches!(state, GameState::WaitingForBuzz)
             } else {
                 false
@@ -191,6 +203,12 @@ mod gameplay_tests {
         assert!(
             buzz_state.is_some(),
             "Player should get WaitingForBuzz state"
+        );
+        assert!(
+            !player_update
+                .iter()
+                .any(|m| matches!(m, GameEvent::GameState { .. })),
+            "Player should not get the full GameState"
         );
 
         send_cmd_and_recv_all(&mut player_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
@@ -218,6 +236,7 @@ mod gameplay_tests {
     async fn test_player_reconnect() {
         let (_server, port, state) = start_test_server().await;
         let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
 
         let host_token = {
             let room_map = state.room_map.lock().await;
@@ -227,10 +246,13 @@ mod gameplay_tests {
                 .host_token
                 .clone()
         };
-        let mut _host_ws =
+        let mut host_ws =
             connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
 
-        let (player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+        let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+        let _ = recv_msgs(&mut host_ws).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
         let player_token = {
             let room_map = state.room_map.lock().await;
             let room = room_map.get(&room_code).expect("Could not find room");
@@ -281,13 +303,20 @@ mod gameplay_tests {
             .any(|m| matches!(m, GameEvent::NewPlayer { .. }));
         assert!(!got_new_player, "Should not get NewPlayer on reconnect");
 
-        let has_state = reconnect_msgs.iter().any(|m| {
+        let has_public_state = reconnect_msgs.iter().any(|m| {
             matches!(
                 m,
-                GameEvent::PlayerState { .. } | GameEvent::GameState { .. }
+                GameEvent::PublicState {
+                    state: GameState::Selection,
+                    ..
+                }
             )
         });
-        assert!(has_state, "Should receive state on reconnect");
+        assert!(has_public_state, "Should receive PublicState on reconnect");
+        let has_player_state = reconnect_msgs
+            .iter()
+            .any(|m| matches!(m, GameEvent::PlayerState { .. }));
+        assert!(has_player_state, "Should receive PlayerState on reconnect");
 
         if let Some(GameEvent::PlayerState { pid, .. }) = reconnect_msgs
             .iter()
@@ -343,7 +372,7 @@ mod gameplay_tests {
         let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut player_ws]).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
 
         play_question(&mut host_ws, &mut player_ws, 0, 0, true).await;
 
@@ -376,7 +405,7 @@ mod gameplay_tests {
         let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut player_ws]).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
 
         play_question(&mut host_ws, &mut player_ws, 0, 0, false).await;
 
@@ -392,6 +421,7 @@ mod gameplay_tests {
     async fn test_host_reconnect() {
         let (_server, port, state) = start_test_server().await;
         let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
 
         let host_token = {
             let room_map = state.room_map.lock().await;
@@ -406,10 +436,10 @@ mod gameplay_tests {
             connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
         let _initial = recv_msgs(&mut host_ws).await;
 
-        let (mut player_ws, _player_id) = add_player(port, &room_code, "AJ").await;
+        let (mut player_ws, player_id) = add_player(port, &room_code, "AJ").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut player_ws]).await;
+        start_game(&mut host_ws, &mut [&mut player_ws], player_id).await;
 
         send_cmd_and_recv_all(
             &mut host_ws,
@@ -466,13 +496,279 @@ mod gameplay_tests {
         let waiting_state = player_ready.iter().any(|m| {
             matches!(
                 m,
-                GameEvent::GameState {
+                GameEvent::PublicState {
                     state: GameState::WaitingForBuzz,
                     ..
                 }
             )
         });
         assert!(waiting_state, "Game should continue after host reconnects");
+    }
+
+    #[tokio::test]
+    async fn test_players_never_receive_game_state() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let mut aj_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
+        let mut aj_texts = recv_texts(&mut aj_ws).await;
+        let mut sam_ws = connect_ws_client(port, &room_code, "?playerName=Sam").await;
+        let mut sam_texts = recv_texts(&mut sam_ws).await;
+
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::StartGame).await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostSetPicker { pid: 1 }).await;
+        send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 0,
+            },
+        )
+        .await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostReady).await;
+        // Let the delayed HostReady witness arrive
+        sleep(Duration::from_millis(600)).await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+
+        let witness = sam_texts
+            .iter()
+            .filter_map(|t| serde_json::from_str::<GameEvent>(t).ok())
+            .find_map(|m| match m {
+                GameEvent::Witness { msg } => Some(*msg),
+                _ => None,
+            })
+            .expect("Players should receive the HostReady witness");
+        assert!(matches!(
+            witness,
+            GameEvent::PublicState {
+                state: GameState::WaitingForBuzz,
+                ..
+            }
+        ));
+
+        // A late joiner and a reconnecting player both get the public state
+        let mut late_ws = connect_ws_client(port, &room_code, "?playerName=Late").await;
+        let mut late_texts = recv_texts(&mut late_ws).await;
+
+        let (aj_id, aj_token) = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            let aj = &room.players[0].player;
+            (aj.pid, aj.token.clone())
+        };
+        drop(aj_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut aj_ws = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", aj_token, aj_id),
+        )
+        .await;
+        let reconnect_texts = recv_texts(&mut aj_ws).await;
+        for texts in [&late_texts, &reconnect_texts] {
+            assert!(
+                texts
+                    .iter()
+                    .filter_map(|t| serde_json::from_str::<GameEvent>(t).ok())
+                    .any(|m| matches!(
+                        m,
+                        GameEvent::PublicState {
+                            state: GameState::WaitingForBuzz,
+                            ..
+                        }
+                    )),
+                "Should receive PublicState on join: {:?}",
+                texts
+            );
+        }
+        aj_texts.extend(reconnect_texts);
+
+        send_cmd_and_recv_all(&mut sam_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
+        wait_for_buzz_window().await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostChecked { correct: true }).await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostContinue).await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        late_texts.extend(recv_texts(&mut late_ws).await);
+
+        let (tokens, answers): (Vec<String>, Vec<String>) = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            (
+                room.players
+                    .iter()
+                    .map(|p| p.player.token.to_string())
+                    .collect(),
+                room.rounds[0][0]
+                    .questions
+                    .iter()
+                    .map(|q| q.answer.clone())
+                    .collect(),
+            )
+        };
+
+        for (i, texts) in [&aj_texts, &sam_texts, &late_texts].iter().enumerate() {
+            assert!(
+                texts.iter().any(|t| t.contains(r#""type":"PublicState""#)),
+                "Player {} should receive PublicState",
+                i
+            );
+            for text in texts.iter() {
+                assert!(
+                    !text.contains(r#""type":"GameState""#),
+                    "Player {} received GameState: {}",
+                    i,
+                    text
+                );
+                for answer in &answers {
+                    assert!(!text.contains(answer), "Answer leaked: {}", text);
+                }
+                for (j, token) in tokens.iter().enumerate() {
+                    // Only NewPlayer may carry a token, and only the owner's
+                    let allowed = i == j && text.contains(r#""type":"NewPlayer""#);
+                    assert!(
+                        allowed || !text.contains(token),
+                        "Player {}'s token leaked to player {}: {}",
+                        j,
+                        i,
+                        text
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_player_cannot_send_host_commands() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http(port).await;
+        add_room_categories(&state, &room_code).await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let (mut player_ws, _player_id) = add_player(port, &room_code, "AJ").await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let player_msgs = send_cmd_and_recv_all(&mut player_ws, &GameCommand::StartGame).await;
+        let host_msgs = recv_msgs(&mut host_ws).await;
+        assert!(player_msgs.is_empty(), "Got {:?}", player_msgs);
+        assert!(host_msgs.is_empty(), "Got {:?}", host_msgs);
+
+        let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).expect("Could not find room");
+        assert!(matches!(room.state, GameState::Start));
+    }
+
+    #[tokio::test]
+    async fn test_disconnected_player_does_not_freeze_server() {
+        const QUESTIONS: usize = 40;
+
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http(port).await;
+        add_room_category(&state, &room_code, QUESTIONS).await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let (player_ws, player_id) = add_player(port, &room_code, "AJ").await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let player_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            room.players[0].player.token.clone()
+        };
+
+        // The player closes their tab, but stays in the room
+        drop(player_ws);
+        sleep(Duration::from_millis(100)).await;
+
+        // Every one of these sends the player several messages that nobody reads
+        send_cmd(&mut host_ws, &GameCommand::StartGame).await;
+        send_cmd(&mut host_ws, &GameCommand::HostSetPicker { pid: player_id }).await;
+        for question_index in 0..QUESTIONS {
+            send_cmd(
+                &mut host_ws,
+                &GameCommand::HostChoice {
+                    category_index: 0,
+                    question_index,
+                },
+            )
+            .await;
+            send_cmd(&mut host_ws, &GameCommand::HostSkip).await;
+            send_cmd(&mut host_ws, &GameCommand::HostContinue).await;
+        }
+
+        let finished = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let _ = recv_msgs(&mut host_ws).await;
+                let room_map = state.room_map.lock().await;
+                let room = room_map.get(&room_code).expect("Could not find room");
+                if room.state == GameState::GameEnd {
+                    break;
+                }
+            }
+        })
+        .await;
+        assert!(
+            finished.is_ok(),
+            "Server froze sending to a disconnected player"
+        );
+
+        // The player can still come back
+        let mut player_reconnect = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", player_token, player_id),
+        )
+        .await;
+        let reconnect_msgs =
+            tokio::time::timeout(Duration::from_secs(5), recv_msgs(&mut player_reconnect))
+                .await
+                .expect("Reconnect timed out");
+        assert!(
+            reconnect_msgs.iter().any(|m| matches!(
+                m,
+                GameEvent::PublicState {
+                    state: GameState::GameEnd,
+                    ..
+                }
+            )),
+            "Reconnected player should get the current state: {:?}",
+            reconnect_msgs
+        );
     }
 
     #[tokio::test]
@@ -500,7 +796,7 @@ mod gameplay_tests {
         let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws]).await;
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
 
         // Question 1: AJ buzzes and gets it correct (+100)
         play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
@@ -512,17 +808,39 @@ mod gameplay_tests {
         }
 
         // Question 2: Sam buzzes and gets it incorrect (-200)
-        play_question(&mut host_ws, &mut sam_ws, 0, 1, false).await;
+        send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 1,
+            },
+        )
+        .await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostReady).await;
+        let _ = recv_msgs(&mut sam_ws).await;
+        send_cmd_and_recv_all(&mut sam_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
+        wait_for_buzz_window().await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostChecked { correct: false }).await;
+        let _ = recv_msgs(&mut sam_ws).await;
         let _ = recv_msgs(&mut aj_ws).await;
 
         {
             let room_map = state.room_map.lock().await;
             assert_eq!(get_player_score(&room_map, &room_code, aj_id), 100);
             assert_eq!(get_player_score(&room_map, &room_code, sam_id), -200);
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert!(
+                matches!(room.state, GameState::WaitingForBuzz),
+                "Buzzing should reopen for AJ"
+            );
         }
 
-        // Question 2 again: AJ buzzes and gets it correct (+200 = 300 total)
-        play_question(&mut host_ws, &mut aj_ws, 0, 1, true).await;
+        // Question 2 rebound: AJ buzzes and gets it correct (+200 = 300 total)
+        send_cmd_and_recv_all(&mut aj_ws, &GameCommand::Buzz { reaction_ms: 200 }).await;
+        wait_for_buzz_window().await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostChecked { correct: true }).await;
+        send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostContinue).await;
+        let _ = recv_msgs(&mut aj_ws).await;
         let _ = recv_msgs(&mut sam_ws).await;
 
         // Question 3: AJ buzzes and gets it correct (+400 = 600 total)
@@ -544,6 +862,1110 @@ mod gameplay_tests {
             );
             assert!(matches!(room.state, GameState::GameEnd));
         }
+    }
+
+    #[tokio::test]
+    async fn test_two_round_game() {
+        let (_server, port, state) = start_test_server().await;
+        let category = |title: &str, value: u32| {
+            serde_json::json!({
+                "title": title,
+                "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": value},
+                    {"question": "Question 2", "answer": "Answer 2", "value": value * 2},
+                ],
+            })
+        };
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [category("Single", 200)],
+                "doubleCategories": [category("Double", 400)],
+            }),
+        )
+        .await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.rounds.len(), 2, "Room should have two rounds");
+            room.host_token.clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+        let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
+
+        // Clearing the Jeopardy board (+200, +400) starts Double Jeopardy
+        play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
+        play_question(&mut host_ws, &mut aj_ws, 0, 1, true).await;
+        {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert!(matches!(room.state, GameState::Selection));
+            assert_eq!(room.round_index, 1, "Double Jeopardy should start");
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 600);
+        }
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        let last_public = sam_msgs
+            .iter()
+            .rev()
+            .find_map(|m| match m {
+                GameEvent::PublicState { state, round, .. } => Some((state.clone(), *round)),
+                _ => None,
+            })
+            .expect("Sam should receive PublicState");
+        assert_eq!(
+            last_public,
+            (GameState::Selection, 1),
+            "Players should be told Double Jeopardy started"
+        );
+
+        // A reconnecting host gets the Double Jeopardy board
+        drop(host_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let reconnect_state = recv_msgs(&mut host_ws)
+            .await
+            .into_iter()
+            .find_map(|m| match m {
+                GameEvent::GameState {
+                    round,
+                    round_count,
+                    categories,
+                    ..
+                } => Some((round, round_count, categories[0].title.clone())),
+                _ => None,
+            })
+            .expect("Reconnecting host should receive GameState");
+        assert_eq!(reconnect_state, (1, 2, "Double".to_string()));
+
+        // A late joiner is told it's Double Jeopardy
+        let mut late_ws = connect_ws_client(port, &room_code, "?playerName=Late").await;
+        let late_round = recv_msgs(&mut late_ws)
+            .await
+            .into_iter()
+            .find_map(|m| match m {
+                GameEvent::PublicState { state, round, .. } => Some((state, round)),
+                _ => None,
+            });
+        assert_eq!(late_round, Some((GameState::Selection, 1)));
+        let _ = recv_msgs(&mut host_ws).await;
+
+        // Clue indices now refer to the Double Jeopardy board (+800)
+        play_question(&mut host_ws, &mut aj_ws, 0, 1, true).await;
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 1400);
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 0);
+        }
+
+        // The host ends Double Jeopardy with a clue left, which ends the game
+        let host_msgs =
+            send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostNextRound { round: 1 }).await;
+        let game_state = host_msgs
+            .iter()
+            .find_map(|m| match m {
+                GameEvent::GameState {
+                    state,
+                    round,
+                    round_count,
+                    categories,
+                    winner,
+                    ..
+                } => Some((
+                    state.clone(),
+                    *round,
+                    *round_count,
+                    categories[0].title.clone(),
+                    *winner,
+                )),
+                _ => None,
+            })
+            .expect("Host should receive GameState");
+        assert_eq!(
+            game_state,
+            (GameState::GameEnd, 1, 2, "Double".to_string(), Some(aj_id))
+        );
+    }
+
+    /// The last PublicState in `msgs`, as `(state, round, picker)`
+    fn last_public_state(msgs: &[GameEvent]) -> Option<(GameState, usize, Option<u32>)> {
+        msgs.iter().rev().find_map(|m| match m {
+            GameEvent::PublicState {
+                state,
+                round,
+                picker,
+            } => Some((state.clone(), *round, *picker)),
+            _ => None,
+        })
+    }
+
+    /// What the host is told: `(state, current buzzer, picker, Daily Double wager)`
+    type HostView = (GameState, Option<u32>, Option<u32>, Option<u32>);
+
+    /// The last GameState in `msgs`
+    fn last_game_state(msgs: &[GameEvent]) -> Option<HostView> {
+        msgs.iter().rev().find_map(|m| match m {
+            GameEvent::GameState {
+                state,
+                current_buzzer,
+                picker,
+                dd_wager,
+                ..
+            } => Some((state.clone(), *current_buzzer, *picker, *dd_wager)),
+            _ => None,
+        })
+    }
+
+    fn parse_all(texts: &[String]) -> Vec<GameEvent> {
+        texts
+            .iter()
+            .map(|t| serde_json::from_str(t).expect("Failed to parse GameEvent"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_picker_and_daily_double() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [{"title": "Single", "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": 200},
+                    {"question": "Question 2", "answer": "Answer 2", "value": 400, "dailyDouble": true},
+                    {"question": "Question 3", "answer": "Answer 3", "value": 600},
+                ]}],
+                "doubleCategories": [{"title": "Double", "questions": [
+                    {"question": "Question 4", "answer": "Answer 4", "value": 400},
+                    {"question": "Question 5", "answer": "Answer 5", "value": 800},
+                ]}],
+            }),
+        )
+        .await;
+
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert!(room.rounds[0][0].questions[1].daily_double);
+            room.host_token.clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let mut host_texts = recv_texts(&mut host_ws).await;
+        let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+        let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+        host_texts.extend(recv_texts(&mut host_ws).await);
+        let mut aj_texts = Vec::new();
+
+        // Nobody can choose a clue until the host says who picks first
+        send_cmd(&mut host_ws, &GameCommand::StartGame).await;
+        host_texts.extend(recv_texts(&mut host_ws).await);
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        assert_eq!(
+            last_public_state(&sam_msgs),
+            Some((GameState::Selection, 0, None))
+        );
+        send_cmd(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 0,
+            },
+        )
+        .await;
+        let ignored = recv_texts(&mut host_ws).await;
+        assert!(ignored.is_empty(), "HostChoice needs a picker: {ignored:?}");
+
+        let host_msgs =
+            send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostSetPicker { pid: aj_id }).await;
+        assert_eq!(
+            last_game_state(&host_msgs),
+            Some((GameState::Selection, None, Some(aj_id), None))
+        );
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        assert_eq!(
+            last_public_state(&sam_msgs),
+            Some((GameState::Selection, 0, Some(aj_id)))
+        );
+
+        // AJ chooses a clue, and Sam answers it correctly (+200), so Sam picks next
+        play_question(&mut host_ws, &mut sam_ws, 0, 0, true).await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        assert_eq!(
+            last_public_state(&parse_all(&aj_texts)),
+            Some((GameState::Selection, 0, Some(sam_id)))
+        );
+
+        // Sam finds the Daily Double
+        send_cmd(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 1,
+            },
+        )
+        .await;
+        let texts = recv_texts(&mut host_ws).await;
+        assert_eq!(
+            last_game_state(&parse_all(&texts)),
+            Some((GameState::DailyDoubleWager, None, Some(sam_id), None))
+        );
+        host_texts.extend(texts);
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        let sam_view = sam_msgs.iter().find_map(|m| match m {
+            GameEvent::PlayerState {
+                wager_range,
+                prompt,
+                ..
+            } => Some((*wager_range, prompt.clone())),
+            _ => None,
+        });
+        assert_eq!(
+            sam_view,
+            Some((
+                Some(WagerRange { min: 5, max: 600 }),
+                Some("Single".to_string())
+            )),
+            "Sam can wager up to the top clue, since that's more than Sam's score"
+        );
+
+        // Only Sam may wager, and only within the range
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 100 }).await;
+        let texts = recv_texts(&mut aj_ws).await;
+        assert!(
+            parse_all(&texts)
+                .iter()
+                .any(|m| matches!(m, GameEvent::Rejected { .. })),
+            "AJ's wager should be rejected: {texts:?}"
+        );
+        aj_texts.extend(texts);
+        let sam_msgs =
+            send_cmd_and_recv_all(&mut sam_ws, &GameCommand::SubmitWager { amount: 601 }).await;
+        assert!(
+            sam_msgs
+                .iter()
+                .any(|m| matches!(m, GameEvent::Rejected { .. })),
+            "Sam's wager above the range should be rejected: {sam_msgs:?}"
+        );
+
+        // A valid wager goes straight to Sam's answer, with nobody buzzing
+        send_cmd(&mut sam_ws, &GameCommand::SubmitWager { amount: 500 }).await;
+        let texts = recv_texts(&mut host_ws).await;
+        assert_eq!(
+            last_game_state(&parse_all(&texts)),
+            Some((GameState::Answer, Some(sam_id), Some(sam_id), Some(500)))
+        );
+        host_texts.extend(texts);
+        let sam_msgs = recv_msgs(&mut sam_ws).await;
+        assert!(sam_msgs.iter().any(|m| matches!(
+            m,
+            GameEvent::PlayerState {
+                wager: Some(500),
+                ..
+            }
+        )));
+
+        // Sam wins the wager rather than the clue's value (+500 = 700)
+        send_cmd(&mut host_ws, &GameCommand::HostChecked { correct: true }).await;
+        send_cmd(&mut host_ws, &GameCommand::HostContinue).await;
+        host_texts.extend(recv_texts(&mut host_ws).await);
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        let _ = recv_msgs(&mut sam_ws).await;
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 700);
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 0);
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.daily_double, None);
+        }
+
+        // Clearing the board (+600 = 1300) starts Double Jeopardy, where AJ, in last place,
+        // picks first
+        play_question(&mut host_ws, &mut sam_ws, 0, 2, true).await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        assert_eq!(
+            last_public_state(&parse_all(&aj_texts)),
+            Some((GameState::Selection, 1, Some(aj_id)))
+        );
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 1300);
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.picker, Some(aj_id));
+        }
+
+        // Nobody, host included, is told where the Daily Doubles are, and AJ never sees
+        // Sam's wager
+        for text in host_texts.iter().chain(aj_texts.iter()) {
+            assert!(!text.contains(r#""dailyDouble""#), "Flag sent: {text}");
+        }
+        for msg in parse_all(&aj_texts) {
+            if let GameEvent::PlayerState {
+                wager_range,
+                wager,
+                prompt,
+                ..
+            } = msg
+            {
+                assert_eq!((wager_range, wager, prompt), (None, None, None));
+            }
+        }
+    }
+
+    /// The wager fields of the last PlayerState in `msgs`
+    fn last_wager_view(
+        msgs: &[GameEvent],
+    ) -> Option<(Option<WagerRange>, Option<u32>, Option<String>)> {
+        msgs.iter().rev().find_map(|m| match m {
+            GameEvent::PlayerState {
+                wager_range,
+                wager,
+                prompt,
+                ..
+            } => Some((*wager_range, *wager, prompt.clone())),
+            _ => None,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_daily_double_survives_reconnects_and_late_joins() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [{"title": "Single", "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": 200, "dailyDouble": true},
+                    {"question": "Question 2", "answer": "Answer 2", "value": 400},
+                ]}],
+            }),
+        )
+        .await;
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        // Everything sent on connecting, which is where a flag would most likely leak
+        let mut join_texts = recv_texts(&mut host_ws).await;
+
+        let mut aj_ws = connect_ws_client(port, &room_code, "?playerName=AJ").await;
+        join_texts.extend(recv_texts(&mut aj_ws).await);
+        let (mut sam_ws, _sam_id) = add_player(port, &room_code, "Sam").await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let (aj_id, aj_token) = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            let aj = &room.players[0].player;
+            (aj.pid, aj.token.clone())
+        };
+
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
+        let _ = recv_msgs(&mut aj_ws).await;
+        send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 0,
+            },
+        )
+        .await;
+        let _ = recv_msgs(&mut sam_ws).await;
+
+        // AJ's phone drops while AJ is deciding on a wager, and comes back
+        drop(aj_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut aj_ws = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", aj_token, aj_id),
+        )
+        .await;
+        let texts = recv_texts(&mut aj_ws).await;
+        let msgs = parse_all(&texts);
+        assert_eq!(
+            last_public_state(&msgs),
+            Some((GameState::DailyDoubleWager, 0, Some(aj_id)))
+        );
+        assert_eq!(
+            last_wager_view(&msgs),
+            Some((
+                Some(WagerRange { min: 5, max: 400 }),
+                None,
+                Some("Single".to_string())
+            )),
+            "The reconnected picker should be asked to wager again"
+        );
+        join_texts.extend(texts);
+
+        // Someone joins in the middle of the Daily Double, and isn't told about it
+        let mut late_ws = connect_ws_client(port, &room_code, "?playerName=Late").await;
+        let texts = recv_texts(&mut late_ws).await;
+        let msgs = parse_all(&texts);
+        assert_eq!(
+            last_public_state(&msgs),
+            Some((GameState::DailyDoubleWager, 0, Some(aj_id)))
+        );
+        assert_eq!(last_wager_view(&msgs), Some((None, None, None)));
+        join_texts.extend(texts);
+        join_texts.extend(recv_texts(&mut host_ws).await);
+
+        // The host reconnects in the middle of the Daily Double
+        drop(host_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let texts = recv_texts(&mut host_ws).await;
+        assert_eq!(
+            last_game_state(&parse_all(&texts)),
+            Some((GameState::DailyDoubleWager, None, Some(aj_id), None))
+        );
+        join_texts.extend(texts);
+
+        for text in &join_texts {
+            assert!(!text.contains(r#""dailyDouble""#), "Flag sent: {text}");
+        }
+
+        // The reconnected picker's wager still works
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 300 }).await;
+        let host_msgs = recv_msgs(&mut host_ws).await;
+        assert_eq!(
+            last_game_state(&host_msgs),
+            Some((GameState::Answer, Some(aj_id), Some(aj_id), Some(300)))
+        );
+        assert_eq!(
+            last_wager_view(&recv_msgs(&mut aj_ws).await),
+            Some((None, Some(300), Some("Single".to_string())))
+        );
+        assert_eq!(
+            last_wager_view(&recv_msgs(&mut late_ws).await),
+            Some((None, None, None))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_random_daily_doubles() {
+        let (_server, port, state) = start_test_server().await;
+        let board = |value: u32| {
+            (0..3)
+                .map(|c| {
+                    serde_json::json!({
+                        "title": format!("Category {c}"),
+                        "questions": (1..=3)
+                            .map(|i| serde_json::json!({
+                                "question": "Q", "answer": "A", "value": value * i,
+                            }))
+                            .collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": board(200),
+                "doubleCategories": board(400),
+                "randomDailyDoubles": true,
+            }),
+        )
+        .await;
+
+        let room_map = state.room_map.lock().await;
+        let room = room_map.get(&room_code).expect("Could not find room");
+        let counts: Vec<usize> = room
+            .rounds
+            .iter()
+            .map(|round| {
+                round
+                    .iter()
+                    .flat_map(|c| &c.questions)
+                    .filter(|q| q.daily_double)
+                    .count()
+            })
+            .collect();
+        assert_eq!(counts, vec![1, 2]);
+    }
+
+    /// The Final Jeopardy fields of a PlayerState:
+    /// `(wager range, wager, prompt, can answer, answer, correct)`
+    type FinalPlayerView = (
+        Option<WagerRange>,
+        Option<u32>,
+        Option<String>,
+        bool,
+        Option<String>,
+        Option<bool>,
+    );
+
+    /// The Final Jeopardy fields of the last PlayerState in `msgs`
+    fn last_final_view(msgs: &[GameEvent]) -> Option<FinalPlayerView> {
+        msgs.iter().rev().find_map(|m| match m {
+            GameEvent::PlayerState {
+                wager_range,
+                wager,
+                prompt,
+                can_answer,
+                answer,
+                correct,
+                ..
+            } => Some((
+                *wager_range,
+                *wager,
+                prompt.clone(),
+                *can_answer,
+                answer.clone(),
+                *correct,
+            )),
+            _ => None,
+        })
+    }
+
+    /// The Final Jeopardy in the last GameState in `msgs`
+    fn last_host_final(msgs: &[GameEvent]) -> Option<FinalView> {
+        msgs.iter()
+            .rev()
+            .find_map(|m| match m {
+                GameEvent::GameState { final_jeopardy, .. } => Some(final_jeopardy.clone()),
+                _ => None,
+            })
+            .flatten()
+    }
+
+    /// `(pid, wager, answer, correct, revealed)` of each entry
+    type HostFinalEntry = (u32, Option<u32>, Option<String>, Option<bool>, bool);
+
+    fn host_final_entries(final_view: &FinalView) -> Vec<HostFinalEntry> {
+        final_view
+            .entries
+            .iter()
+            .map(|e| (e.pid, e.wager, e.answer.clone(), e.correct, e.revealed))
+            .collect()
+    }
+
+    const FINAL_CATEGORY: &str = "Wisconsin Rivers";
+    const FINAL_CLUE: &str = "This river flows through Madison's lakes";
+    const FINAL_RESPONSE: &str = "What is the Yahara?";
+
+    fn final_json() -> serde_json::Value {
+        serde_json::json!({
+            "category": FINAL_CATEGORY,
+            "question": FINAL_CLUE,
+            "answer": FINAL_RESPONSE,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_full_game_with_final_jeopardy() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [{"title": "Single", "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": 200},
+                    {"question": "Question 2", "answer": "Answer 2", "value": 400, "dailyDouble": true},
+                ]}],
+                "doubleCategories": [{"title": "Double", "questions": [
+                    {"question": "Question 3", "answer": "Answer 3", "value": 400},
+                    {"question": "Question 4", "answer": "Answer 4", "value": 800},
+                ]}],
+                "final": final_json(),
+            }),
+        )
+        .await;
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert!(room.final_question.is_some(), "Room should have a Final");
+            room.host_token.clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+        let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+        let _ = recv_msgs(&mut host_ws).await;
+
+        // The host chooses AJ to pick first, and AJ answers the first clue (+200)
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
+        play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
+        let _ = recv_msgs(&mut sam_ws).await;
+
+        // AJ finds the Daily Double and wins the wager (+300 = 500)
+        let host_msgs = send_cmd_and_recv_all(
+            &mut host_ws,
+            &GameCommand::HostChoice {
+                category_index: 0,
+                question_index: 1,
+            },
+        )
+        .await;
+        assert_eq!(
+            last_game_state(&host_msgs),
+            Some((GameState::DailyDoubleWager, None, Some(aj_id), None))
+        );
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 300 }).await;
+        assert_eq!(
+            last_game_state(&recv_msgs(&mut host_ws).await),
+            Some((GameState::Answer, Some(aj_id), Some(aj_id), Some(300)))
+        );
+        send_cmd(&mut host_ws, &GameCommand::HostChecked { correct: true }).await;
+        send_cmd(&mut host_ws, &GameCommand::HostContinue).await;
+
+        // That clears the board, so Double Jeopardy starts with Sam, in last place, picking
+        assert_eq!(
+            last_game_state(&recv_msgs(&mut host_ws).await),
+            Some((GameState::Selection, None, Some(sam_id), None))
+        );
+        let _ = recv_msgs(&mut aj_ws).await;
+        let _ = recv_msgs(&mut sam_ws).await;
+
+        // Sam answers a Double Jeopardy clue (+800)
+        play_question(&mut host_ws, &mut sam_ws, 0, 1, true).await;
+        let _ = recv_msgs(&mut aj_ws).await;
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 500);
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 800);
+        }
+
+        // Ending Double Jeopardy starts Final Jeopardy. The host sees the clue and the
+        // response, and the players only see the category.
+        let host_msgs =
+            send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostNextRound { round: 1 }).await;
+        let final_view = last_host_final(&host_msgs).expect("Host should see Final Jeopardy");
+        assert_eq!(
+            (
+                final_view.category.as_str(),
+                final_view.question.as_str(),
+                final_view.answer.as_str()
+            ),
+            (FINAL_CATEGORY, FINAL_CLUE, FINAL_RESPONSE)
+        );
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (aj_id, None, None, None, false),
+                (sam_id, None, None, None, false)
+            ]
+        );
+        let mut aj_texts = recv_texts(&mut aj_ws).await;
+        let mut sam_texts = recv_texts(&mut sam_ws).await;
+        assert_eq!(
+            last_public_state(&parse_all(&aj_texts)).map(|(state, ..)| state),
+            Some(GameState::FinalWager)
+        );
+        assert_eq!(
+            last_final_view(&parse_all(&aj_texts)),
+            Some((
+                Some(WagerRange { min: 0, max: 500 }),
+                None,
+                Some(FINAL_CATEGORY.to_string()),
+                false,
+                None,
+                None
+            ))
+        );
+
+        // Both wager, Sam after a wager above Sam's score is rejected
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 487 }).await;
+        send_cmd(&mut sam_ws, &GameCommand::SubmitWager { amount: 801 }).await;
+        let texts = recv_texts(&mut sam_ws).await;
+        assert!(
+            parse_all(&texts)
+                .iter()
+                .any(|m| matches!(m, GameEvent::Rejected { .. })),
+            "Sam's wager should be rejected: {texts:?}"
+        );
+        sam_texts.extend(texts);
+        send_cmd(&mut sam_ws, &GameCommand::SubmitWager { amount: 123 }).await;
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        assert_eq!(
+            last_final_view(&parse_all(&aj_texts)).map(|v| v.1),
+            Some(Some(487))
+        );
+        assert_eq!(
+            last_final_view(&parse_all(&sam_texts)).map(|v| v.1),
+            Some(Some(123))
+        );
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should see the wagers");
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (aj_id, Some(487), None, None, false),
+                (sam_id, Some(123), None, None, false)
+            ]
+        );
+
+        // The clue is revealed, and both respond
+        send_cmd(&mut host_ws, &GameCommand::HostRevealFinalClue).await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let texts = recv_texts(&mut aj_ws).await;
+        assert_eq!(
+            last_final_view(&parse_all(&texts)),
+            Some((
+                None,
+                Some(487),
+                Some(FINAL_CLUE.to_string()),
+                true,
+                None,
+                None
+            ))
+        );
+        aj_texts.extend(texts);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        send_cmd(
+            &mut aj_ws,
+            &GameCommand::SubmitAnswer {
+                answer: "  Yahara River ".to_string(),
+            },
+        )
+        .await;
+        send_cmd(
+            &mut sam_ws,
+            &GameCommand::SubmitAnswer {
+                answer: "What is the Wisconsin?".to_string(),
+            },
+        )
+        .await;
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        assert_eq!(
+            last_final_view(&parse_all(&aj_texts)).and_then(|v| v.4),
+            Some("Yahara River".to_string())
+        );
+
+        // The responses are locked, and revealed from the lowest score up: AJ, then Sam
+        send_cmd(&mut host_ws, &GameCommand::HostLockFinalAnswers).await;
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should see the responses");
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (
+                    aj_id,
+                    Some(487),
+                    Some("Yahara River".to_string()),
+                    None,
+                    false
+                ),
+                (
+                    sam_id,
+                    Some(123),
+                    Some("What is the Wisconsin?".to_string()),
+                    None,
+                    false
+                )
+            ]
+        );
+        // A double click on each button only acts once
+        for cmd in [
+            GameCommand::HostRevealFinalResponse { pid: aj_id },
+            GameCommand::HostRevealFinalResponse { pid: aj_id },
+            GameCommand::HostChecked { correct: true },
+            GameCommand::HostChecked { correct: true },
+            GameCommand::HostRevealFinalResponse { pid: sam_id },
+            GameCommand::HostChecked { correct: false },
+        ] {
+            send_cmd(&mut host_ws, &cmd).await;
+        }
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should see the results");
+        assert_eq!(final_view.reveal_index, 2);
+        assert_eq!(
+            host_final_entries(&final_view)
+                .into_iter()
+                .map(|(pid, _, _, correct, revealed)| (pid, correct, revealed))
+                .collect::<Vec<_>>(),
+            vec![(aj_id, Some(true), true), (sam_id, Some(false), true)]
+        );
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        assert_eq!(
+            last_final_view(&parse_all(&aj_texts)).and_then(|v| v.5),
+            Some(true),
+            "AJ is told AJ was right"
+        );
+        {
+            let room_map = state.room_map.lock().await;
+            assert_eq!(get_player_score(&room_map, &room_code, aj_id), 987);
+            assert_eq!(get_player_score(&room_map, &room_code, sam_id), 677);
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.winner, None, "Nobody wins until the host finishes");
+        }
+
+        // The host finishes the game
+        let host_msgs = send_cmd_and_recv_all(&mut host_ws, &GameCommand::HostContinue).await;
+        let game_end = host_msgs.iter().rev().find_map(|m| match m {
+            GameEvent::GameState { state, winner, .. } => Some((state.clone(), *winner)),
+            _ => None,
+        });
+        assert_eq!(game_end, Some((GameState::GameEnd, Some(aj_id))));
+        aj_texts.extend(recv_texts(&mut aj_ws).await);
+        sam_texts.extend(recv_texts(&mut sam_ws).await);
+        assert_eq!(
+            last_public_state(&parse_all(&sam_texts)).map(|(state, ..)| state),
+            Some(GameState::GameEnd)
+        );
+
+        // Neither player is ever sent the correct response, or the other's wager or response
+        for (texts, own_wagers, other_response) in [
+            (&aj_texts, [300, 487], "What is the Wisconsin?"),
+            (&sam_texts, [123, 123], "Yahara River"),
+        ] {
+            for text in texts {
+                assert!(!text.contains(FINAL_RESPONSE), "Response sent: {text}");
+                assert!(!text.contains(other_response), "Response sent: {text}");
+            }
+            for msg in parse_all(texts) {
+                if let GameEvent::PlayerState { wager: Some(w), .. } = msg {
+                    assert!(own_wagers.contains(&w), "Another wager sent: {w}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_final_jeopardy_survives_reconnects_and_late_joins() {
+        let (_server, port, state) = start_test_server().await;
+        let room_code = create_room_http_with(
+            port,
+            serde_json::json!({
+                "categories": [{"title": "Single", "questions": [
+                    {"question": "Question 1", "answer": "Answer 1", "value": 200},
+                ]}],
+                "final": final_json(),
+            }),
+        )
+        .await;
+        let host_token = {
+            let room_map = state.room_map.lock().await;
+            room_map
+                .get(&room_code)
+                .expect("Could not find room")
+                .host_token
+                .clone()
+        };
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let (mut aj_ws, aj_id) = add_player(port, &room_code, "AJ").await;
+        let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
+        let _ = recv_msgs(&mut host_ws).await;
+        let aj_token = {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            room.players[0].player.token.clone()
+        };
+
+        // Clearing the only round's board goes straight to Final Jeopardy
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
+        play_question(&mut host_ws, &mut aj_ws, 0, 0, true).await;
+        let _ = recv_msgs(&mut sam_ws).await;
+        {
+            let room_map = state.room_map.lock().await;
+            let room = room_map.get(&room_code).expect("Could not find room");
+            assert_eq!(room.state, GameState::FinalWager);
+        }
+
+        // Someone joins during the wager, and plays for $1
+        let mut early_ws = connect_ws_client(port, &room_code, "?playerName=Early").await;
+        let mut before_clue = recv_texts(&mut early_ws).await;
+        let msgs = parse_all(&before_clue);
+        let early_id = msgs
+            .iter()
+            .find_map(|m| match m {
+                GameEvent::NewPlayer { pid, .. } => Some(*pid),
+                _ => None,
+            })
+            .expect("Early should be told their pid");
+        assert_eq!(
+            last_final_view(&msgs),
+            Some((
+                None,
+                Some(1),
+                Some(FINAL_CATEGORY.to_string()),
+                false,
+                None,
+                None
+            ))
+        );
+
+        // AJ's phone drops while AJ is deciding on a wager, and comes back
+        drop(aj_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut aj_ws = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", aj_token, aj_id),
+        )
+        .await;
+        let texts = recv_texts(&mut aj_ws).await;
+        assert_eq!(
+            last_final_view(&parse_all(&texts)),
+            Some((
+                Some(WagerRange { min: 0, max: 200 }),
+                None,
+                Some(FINAL_CATEGORY.to_string()),
+                false,
+                None,
+                None
+            ))
+        );
+        before_clue.extend(texts);
+        before_clue.extend(recv_texts(&mut sam_ws).await);
+        for text in &before_clue {
+            assert!(
+                !text.contains(FINAL_CLUE),
+                "Clue sent before it was revealed: {text}"
+            );
+        }
+
+        let host_msgs = recv_msgs(&mut host_ws).await;
+        let final_view = last_host_final(&host_msgs).expect("Host should see the new player");
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (aj_id, None, None, None, false),
+                (sam_id, Some(1), None, None, false),
+                (early_id, Some(1), None, None, false)
+            ]
+        );
+
+        send_cmd(&mut aj_ws, &GameCommand::SubmitWager { amount: 200 }).await;
+        send_cmd(&mut host_ws, &GameCommand::HostRevealFinalClue).await;
+        let _ = recv_msgs(&mut host_ws).await;
+        send_cmd(
+            &mut aj_ws,
+            &GameCommand::SubmitAnswer {
+                answer: "Yahara".to_string(),
+            },
+        )
+        .await;
+        let _ = recv_msgs(&mut aj_ws).await;
+
+        // AJ's phone drops after responding, and comes back with the response
+        drop(aj_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut aj_ws = connect_ws_client(
+            port,
+            &room_code,
+            &format!("?token={}&playerID={}", aj_token, aj_id),
+        )
+        .await;
+        let msgs = recv_msgs(&mut aj_ws).await;
+        assert_eq!(
+            last_public_state(&msgs).map(|(state, ..)| state),
+            Some(GameState::FinalAnswer)
+        );
+        assert_eq!(
+            last_final_view(&msgs),
+            Some((
+                None,
+                Some(200),
+                Some(FINAL_CLUE.to_string()),
+                true,
+                Some("Yahara".to_string()),
+                None
+            )),
+            "AJ's wager and response should be restored"
+        );
+
+        // Someone joins during the clue, and plays for $1
+        let mut later_ws = connect_ws_client(port, &room_code, "?playerName=Later").await;
+        let msgs = recv_msgs(&mut later_ws).await;
+        assert_eq!(
+            last_final_view(&msgs),
+            Some((
+                None,
+                Some(1),
+                Some(FINAL_CLUE.to_string()),
+                true,
+                None,
+                None
+            ))
+        );
+        let later_id = msgs
+            .iter()
+            .find_map(|m| match m {
+                GameEvent::NewPlayer { pid, .. } => Some(*pid),
+                _ => None,
+            })
+            .expect("Later should be told their pid");
+        send_cmd(
+            &mut later_ws,
+            &GameCommand::SubmitAnswer {
+                answer: "Wisconsin".to_string(),
+            },
+        )
+        .await;
+        let _ = recv_msgs(&mut later_ws).await;
+
+        // Everyone at $0 is revealed before AJ, in the order they joined
+        send_cmd(&mut host_ws, &GameCommand::HostLockFinalAnswers).await;
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should see the responses");
+        assert_eq!(
+            host_final_entries(&final_view),
+            vec![
+                (sam_id, Some(1), Some(String::new()), None, false),
+                (early_id, Some(1), Some(String::new()), None, false),
+                (
+                    later_id,
+                    Some(1),
+                    Some("Wisconsin".to_string()),
+                    None,
+                    false
+                ),
+                (aj_id, Some(200), Some("Yahara".to_string()), None, false),
+            ]
+        );
+
+        // Someone joins during the reveal, and only watches
+        let mut latest_ws = connect_ws_client(port, &room_code, "?playerName=Latest").await;
+        let msgs = recv_msgs(&mut latest_ws).await;
+        assert_eq!(
+            last_public_state(&msgs).map(|(state, ..)| state),
+            Some(GameState::FinalReveal)
+        );
+        assert_eq!(
+            last_final_view(&msgs),
+            Some((None, None, None, false, None, None))
+        );
+        let final_view =
+            last_host_final(&recv_msgs(&mut host_ws).await).expect("Host should be told");
+        assert_eq!(final_view.entries.len(), 4, "Latest isn't in the reveal");
+
+        // The host reconnects in the middle of the reveal
+        send_cmd(
+            &mut host_ws,
+            &GameCommand::HostRevealFinalResponse { pid: sam_id },
+        )
+        .await;
+        sleep(Duration::from_millis(100)).await;
+        drop(host_ws);
+        sleep(Duration::from_millis(100)).await;
+        let mut host_ws =
+            connect_ws_client(port, &room_code, &format!("?token={}", host_token)).await;
+        let final_view = last_host_final(&recv_msgs(&mut host_ws).await)
+            .expect("Reconnecting host should see Final Jeopardy");
+        assert_eq!(final_view.reveal_index, 0);
+        assert_eq!(
+            host_final_entries(&final_view)[0],
+            (sam_id, Some(1), Some(String::new()), None, true)
+        );
     }
 
     #[tokio::test]
@@ -570,7 +1992,7 @@ mod gameplay_tests {
         let (mut sam_ws, sam_id) = add_player(port, &room_code, "Sam").await;
         let _ = recv_msgs(&mut host_ws).await;
 
-        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws]).await;
+        start_game(&mut host_ws, &mut [&mut aj_ws, &mut sam_ws], aj_id).await;
 
         send_cmd_and_recv_all(
             &mut host_ws,

@@ -1,54 +1,40 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useWebSocket } from "../hooks/useWebSocket";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import type { GameState, Player } from "../types/game";
+import type { GameCommand } from "../types/messages";
+import { roundName } from "../lib/rounds";
+import { formatMoney } from "../lib/money";
+import { allJudged, displayGameState } from "../lib/finalJeopardy";
 
-interface Question {
-  question: string;
-  answer: string;
-  value: number;
-  answered: boolean;
-}
-
-interface Category {
-  title: string;
-  questions: Question[];
-}
-
-interface PlayerState {
-  pid: number;
-  name: string;
-  score: number;
-}
-
-interface GameState {
-  state: string;
-  categories: Category[];
-  players: PlayerState[];
-  currentQuestion: [number, number] | null;
-  currentBuzzer: number | null;
-}
+/** How long the Final Jeopardy reveal stepper ignores clicks after each step */
+const STEPPER_PAUSE_MS = 400;
 
 export default function Host() {
   console.log("Host mounted", new Date().toISOString());
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
-  const [playerList, setPlayerList] = useState<PlayerState[]>([]);
+  const [playerList, setPlayerList] = useState<Player[]>([]);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [buzzedPlayer, setBuzzedPlayer] = useState<{ pid: number; name: string } | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [choosingPicker, setChoosingPicker] = useState(false);
+  // Whether the host is looking at the Final Jeopardy wagers and responses
+  const [peekFinal, setPeekFinal] = useState(false);
   const displayWindowRef = useRef<Window | null>(null);
   const hostToken = sessionStorage.getItem(`host_token_${code}`);
 
-  // Forward game state to display popup
+  // Forward game state to display popup, without anything the audience mustn't see yet
   useEffect(() => {
+    const displayState = displayGameState(gameState);
     const handleMessage = (event: MessageEvent) => {
       console.log("Host received message:", event.data);
       if (event.data && event.data.type === "displayReady") {
         // Send current game state when display is ready
         if (displayWindowRef.current && !displayWindowRef.current.closed) {
           displayWindowRef.current.postMessage(
-            { gameState, buzzedPlayer, playerList },
+            { gameState: displayState, buzzedPlayer, playerList },
             "*"
           );
         }
@@ -57,7 +43,7 @@ export default function Host() {
 
     if (displayWindowRef.current && !displayWindowRef.current.closed) {
       displayWindowRef.current.postMessage(
-        { gameState, buzzedPlayer, playerList },
+        { gameState: displayState, buzzedPlayer, playerList },
         "*"
       );
     }
@@ -72,7 +58,7 @@ export default function Host() {
       "width=1280,height=720"
     );
     displayWindowRef.current = popup;
-    popup?.postMessage({ gameState, buzzedPlayer }, "*");
+    popup?.postMessage({ gameState: displayGameState(gameState), buzzedPlayer }, "*");
   };
 
   const copyJoinLink = async () => {
@@ -101,10 +87,23 @@ export default function Host() {
           setGameState({
             state: message.state,
             categories: message.categories,
+            round: message.round,
+            roundCount: message.roundCount,
             players: message.players,
             currentQuestion: message.currentQuestion,
             currentBuzzer: message.currentBuzzer,
+            picker: message.picker,
+            ddWager: message.ddWager,
+            hasFinal: message.hasFinal,
+            final: message.final,
+            winner: message.winner,
           });
+          if (message.state !== "selection") {
+            setChoosingPicker(false);
+          }
+          if (message.state !== "finalWager" && message.state !== "finalAnswer") {
+            setPeekFinal(false);
+          }
           if (message.state !== "answer") {
             setBuzzedPlayer(null); // Clear buzzed player when state changes
           }
@@ -117,6 +116,83 @@ export default function Host() {
       }
     },
   });
+
+  const endRound = () => {
+    if (!gameState) return;
+    const current = roundName(gameState.round);
+    const message =
+      gameState.round + 1 < gameState.roundCount
+        ? `End ${current} now and start ${roundName(gameState.round + 1)}? The clues left on this board will be skipped.`
+        : gameState.hasFinal
+        ? `End ${current} now and start Final Jeopardy!? The clues left on this board will be skipped.`
+        : `End ${current} now? This ends the game, and the clues left on the board will be skipped.`;
+    if (window.confirm(message)) {
+      sendMessage({ type: "HostNextRound", round: gameState.round });
+    }
+  };
+
+  const setPicker = (pid: number) => {
+    sendMessage({ type: "HostSetPicker", pid });
+    setChoosingPicker(false);
+  };
+
+  const playerName = (pid: number | null | undefined) =>
+    pid != null ? gameState?.players.find((p) => p.pid === pid)?.name ?? null : null;
+  const pickerName = playerName(gameState?.picker);
+  const currentCategory = gameState?.currentQuestion
+    ? gameState.categories[gameState.currentQuestion[0]]
+    : undefined;
+  const currentClue = gameState?.currentQuestion
+    ? currentCategory?.questions[gameState.currentQuestion[1]]
+    : undefined;
+  const ddWager = gameState?.ddWager ?? null;
+  const final = gameState?.final ?? null;
+  const finalCurrent = final?.entries[final.revealIndex] ?? null;
+  const inFinal =
+    gameState?.state === "finalWager" ||
+    gameState?.state === "finalAnswer" ||
+    gameState?.state === "finalReveal";
+
+  // The reveal stepper's buttons change under the host's pointer after each step, so a
+  // double click must not land on the next button: ignore clicks for a moment after one
+  const [stepperPaused, setStepperPaused] = useState(false);
+  const revealIndex = final?.revealIndex;
+  const currentRevealed = finalCurrent?.revealed;
+  // Before paint, so the new buttons are never clickable before the pause starts
+  useLayoutEffect(() => {
+    setStepperPaused(true);
+    const timer = setTimeout(() => setStepperPaused(false), STEPPER_PAUSE_MS);
+    return () => clearTimeout(timer);
+  }, [revealIndex, currentRevealed]);
+  const stepperSend = (command: GameCommand) => {
+    if (!stepperPaused) sendMessage(command);
+  };
+
+  const revealFinalClue = () => {
+    if (!final) return;
+    const missing = final.entries.filter((e) => e.wager === null).length;
+    if (
+      missing === 0 ||
+      window.confirm(
+        `${missing} player${missing === 1 ? " hasn't" : "s haven't"} wagered. Reveal the clue anyway? They'll wager $0.`
+      )
+    ) {
+      sendMessage({ type: "HostRevealFinalClue" });
+    }
+  };
+
+  const lockFinalAnswers = () => {
+    if (!final) return;
+    const missing = final.entries.filter((e) => e.answer === null).length;
+    if (
+      missing === 0 ||
+      window.confirm(
+        `${missing} player${missing === 1 ? " hasn't" : "s haven't"} responded. Lock the responses anyway?`
+      )
+    ) {
+      sendMessage({ type: "HostLockFinalAnswers" });
+    }
+  };
 
   if (!hostToken) {
     return (
@@ -163,41 +239,109 @@ export default function Host() {
         {gameState ? (
           <div className="space-y-6">
             {/* Current State Indicator */}
-            <div className="bg-gray-800 rounded-lg p-4">
+            <div className="bg-gray-800 rounded-lg p-4 flex justify-between items-center">
               <p className="text-gray-400 text-sm">
                 State: <span className="text-white font-semibold">{gameState.state}</span>
               </p>
+              {inFinal ? (
+                <p className="text-yellow-400 font-bold">Final Jeopardy!</p>
+              ) : gameState.state === "gameEnd" ? (
+                <p className="text-yellow-400 font-bold">Game over</p>
+              ) : (
+                gameState.roundCount > 1 && (
+                  <p className="text-yellow-400 font-bold">
+                    {roundName(gameState.round)}
+                    <span className="text-gray-400 font-normal text-sm ml-2">
+                      Round {gameState.round + 1} of {gameState.roundCount}
+                    </span>
+                  </p>
+                )
+              )}
             </div>
 
             {/* Selection State - Show game board */}
             {gameState.state === "selection" && (
               <div className="bg-gray-800 rounded-lg p-6">
-                <h2 className="text-2xl font-semibold text-white mb-4">Select a Question</h2>
-                <div className="overflow-x-auto">
-                  <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)` }}>
-                    {gameState.categories.map((category, catIdx) => (
-                      <div key={catIdx} className="space-y-2">
-                        <h3 className="text-center text-yellow-400 font-bold text-sm uppercase truncate">
-                          {category.title}
-                        </h3>
-                        {category.questions.map((question, qIdx) => (
-                          <button
-                            key={qIdx}
-                            disabled={question.answered}
-                            onClick={() => sendMessage({ type: "HostChoice", categoryIndex: catIdx, questionIndex: qIdx })}
-                            className={`w-full py-4 rounded font-bold text-lg ${
-                              question.answered
-                                ? "bg-gray-700 text-gray-500 cursor-not-allowed"
-                                : "bg-red-600 text-white hover:bg-red-500"
-                            }`}
-                          >
-                            ${question.value}
-                          </button>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
+                <div className="flex justify-between items-center mb-4">
+                  {gameState.picker === null ? (
+                    <h2 className="text-2xl font-semibold text-white">Who picks first?</h2>
+                  ) : choosingPicker ? (
+                    <h2 className="text-2xl font-semibold text-white">
+                      Who picks next?
+                      <button
+                        onClick={() => setChoosingPicker(false)}
+                        className="ml-3 text-sm font-normal text-gray-400 underline hover:text-gray-200"
+                      >
+                        cancel
+                      </button>
+                    </h2>
+                  ) : (
+                    <h2 className="text-2xl font-semibold text-white">
+                      <span className="text-yellow-400">{pickerName ?? "Unknown player"}</span>'s pick
+                      <button
+                        onClick={() => setChoosingPicker(true)}
+                        className="ml-3 text-sm font-normal text-gray-400 underline hover:text-gray-200"
+                      >
+                        change
+                      </button>
+                    </h2>
+                  )}
+                  <button
+                    onClick={endRound}
+                    className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500 text-sm font-semibold"
+                  >
+                    {gameState.round + 1 < gameState.roundCount || gameState.hasFinal
+                      ? "End Round"
+                      : "End Game"}
+                  </button>
                 </div>
+                {gameState.picker === null || choosingPicker ? (
+                  gameState.players.length === 0 ? (
+                    <p className="text-gray-400">Waiting for players to join...</p>
+                  ) : (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {gameState.players.map((player) => (
+                        <button
+                          key={player.pid}
+                          onClick={() => setPicker(player.pid)}
+                          className={`py-4 rounded font-bold text-lg text-white ${
+                            player.pid === gameState.picker
+                              ? "bg-yellow-600 hover:bg-yellow-500"
+                              : "bg-blue-600 hover:bg-blue-500"
+                          }`}
+                        >
+                          {player.name}
+                        </button>
+                      ))}
+                    </div>
+                  )
+                ) : (
+                  <div className="overflow-x-auto">
+                    <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${gameState.categories.length}, 1fr)` }}>
+                      {gameState.categories.map((category, catIdx) => (
+                        <div key={catIdx} className="space-y-2">
+                          <h3 className="text-center text-yellow-400 font-bold text-sm uppercase truncate">
+                            {category.title}
+                          </h3>
+                          {category.questions.map((question, qIdx) => (
+                            <button
+                              key={qIdx}
+                              disabled={question.answered}
+                              onClick={() => sendMessage({ type: "HostChoice", categoryIndex: catIdx, questionIndex: qIdx })}
+                              className={`w-full py-4 rounded font-bold text-lg ${
+                                question.answered
+                                  ? "bg-gray-700 text-gray-500 cursor-not-allowed"
+                                  : "bg-red-600 text-white hover:bg-red-500"
+                              }`}
+                            >
+                              ${question.value}
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -222,6 +366,28 @@ export default function Host() {
                   className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
                 >
                   Skip Question
+                </button>
+              </div>
+            )}
+
+            {/* Daily Double - the clue stays hidden until the picker has wagered */}
+            {gameState.state === "dailyDoubleWager" && (
+              <div className="bg-gray-800 rounded-lg p-6 text-center">
+                <h2 className="text-4xl font-black text-yellow-400 mb-2">Daily Double!</h2>
+                <p className="text-xl text-white mb-6">
+                  {currentCategory?.title} - ${currentClue?.value}
+                </p>
+                <p className="text-2xl text-gray-300 animate-pulse mb-2">
+                  Waiting for {pickerName ?? "the picker"} to wager...
+                </p>
+                <p className="text-sm text-gray-400 mb-6">
+                  The clue appears here once the wager is in.
+                </p>
+                <button
+                  onClick={() => sendMessage({ type: "HostSkip" })}
+                  className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
+                >
+                  Skip Daily Double
                 </button>
               </div>
             )}
@@ -252,21 +418,27 @@ export default function Host() {
             {gameState.state === "answer" && gameState.currentQuestion && (
               <div className="bg-gray-800 rounded-lg p-6">
                 <h2 className="text-xl font-semibold text-yellow-400 mb-2">
-                  {gameState.categories[gameState.currentQuestion[0]]?.title} - $
-                  {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.value}
+                  {currentCategory?.title} -{" "}
+                  {ddWager !== null ? `Daily Double for ${formatMoney(ddWager)}` : `$${currentClue?.value}`}
                 </h2>
                 <p className="text-3xl text-white mb-4">
-                  {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
+                  {currentClue?.question}
                 </p>
                 <p className="text-lg text-gray-400 mb-6">
                   Answer: <span className="text-yellow-300">
-                    {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.answer}
+                    {currentClue?.answer}
                   </span>
                 </p>
-                {buzzedPlayer && (
+                {ddWager !== null ? (
                   <p className="text-2xl text-red-400 mb-6">
-                    {buzzedPlayer.name} buzzed in!
+                    {playerName(gameState.currentBuzzer)} wagered {formatMoney(ddWager)}
                   </p>
+                ) : (
+                  buzzedPlayer && (
+                    <p className="text-2xl text-red-400 mb-6">
+                      {buzzedPlayer.name} buzzed in!
+                    </p>
+                  )
                 )}
                 <div className="flex gap-4 justify-center">
                   <button
@@ -281,6 +453,14 @@ export default function Host() {
                   >
                     Incorrect
                   </button>
+                  {ddWager !== null && (
+                    <button
+                      onClick={() => sendMessage({ type: "HostSkip" })}
+                      className="px-8 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 text-lg font-semibold"
+                    >
+                      Skip
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -295,6 +475,11 @@ export default function Host() {
                 <p className="text-3xl text-white mb-4">
                   {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.question}
                 </p>
+                {ddWager !== null && (
+                  <p className="text-lg text-gray-300 mb-2">
+                    Daily Double: {pickerName} wagered {formatMoney(ddWager)}
+                  </p>
+                )}
                 <p className="text-2xl text-green-400 mb-6">
                   Answer: <span className="text-yellow-300">
                     {gameState.categories[gameState.currentQuestion[0]]?.questions[gameState.currentQuestion[1]]?.answer}
@@ -314,6 +499,184 @@ export default function Host() {
               </div>
             )}
 
+            {/* Final Jeopardy - the host sees everything, the display only what's revealed */}
+            {final && (gameState.state === "finalWager" || gameState.state === "finalAnswer") && (
+              <div className="bg-gray-800 rounded-lg p-6">
+                <h2 className="text-4xl font-black text-yellow-400 mb-2 text-center">
+                  Final Jeopardy!
+                </h2>
+                <p className="text-2xl text-white text-center mb-4">{final.category}</p>
+                {gameState.state === "finalWager" ? (
+                  <p className="text-gray-400 mb-6 text-center">
+                    Clue, hidden from the display until you reveal it:{" "}
+                    <span className="text-gray-200">{final.question}</span>
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-3xl text-white mb-4">{final.question}</p>
+                    <p className="text-lg text-gray-400 mb-6">
+                      Answer: <span className="text-yellow-300">{final.answer}</span>
+                    </p>
+                  </>
+                )}
+                <div className="flex justify-between items-center mb-2">
+                  <h3 className="text-lg font-semibold text-white">
+                    {gameState.state === "finalWager" ? "Wagers" : "Responses"}
+                  </h3>
+                  <button
+                    onClick={() => setPeekFinal(!peekFinal)}
+                    className="text-sm text-gray-400 underline hover:text-gray-200"
+                  >
+                    {peekFinal ? "hide" : "peek"}
+                  </button>
+                </div>
+                <ul className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-6">
+                  {final.entries.map((entry) => {
+                    const done =
+                      gameState.state === "finalWager" ? entry.wager !== null : entry.answer !== null;
+                    return (
+                      <li
+                        key={entry.pid}
+                        className={`rounded p-3 text-center ${done ? "bg-green-800" : "bg-gray-700"}`}
+                      >
+                        <p className="text-white font-semibold">
+                          {done ? "✓ " : ""}
+                          {playerName(entry.pid) ?? `Player ${entry.pid}`}
+                        </p>
+                        <p className="text-sm text-gray-300 break-words">
+                          {!done
+                            ? "waiting..."
+                            : !peekFinal
+                            ? gameState.state === "finalWager" ? "wagered" : "responded"
+                            : gameState.state === "finalWager"
+                            ? formatMoney(entry.wager ?? 0)
+                            : entry.answer}
+                        </p>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <div className="text-center">
+                  {gameState.state === "finalWager" ? (
+                    <button
+                      onClick={revealFinalClue}
+                      className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 text-lg font-semibold"
+                    >
+                      Reveal clue
+                    </button>
+                  ) : (
+                    <button
+                      onClick={lockFinalAnswers}
+                      className="px-8 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 text-lg font-semibold"
+                    >
+                      Lock answers
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Final Jeopardy reveal - one player at a time, lowest score first */}
+            {final && gameState.state === "finalReveal" && (
+              <div className="bg-gray-800 rounded-lg p-6">
+                <h2 className="text-4xl font-black text-yellow-400 mb-2 text-center">
+                  Final Jeopardy!
+                </h2>
+                <p className="text-xl text-white text-center mb-1">{final.question}</p>
+                <p className="text-lg text-gray-400 text-center mb-6">
+                  Answer: <span className="text-yellow-300">{final.answer}</span>
+                  {!allJudged(final) && (
+                    <span className="text-gray-500 text-sm"> (on the display after the last player)</span>
+                  )}
+                </p>
+                {finalCurrent ? (
+                  <div className="bg-gray-700 rounded-lg p-6 text-center mb-6">
+                    <p className="text-gray-400 text-sm mb-1">
+                      Player {final.revealIndex + 1} of {final.entries.length}
+                    </p>
+                    <p className="text-3xl font-bold text-white mb-4">
+                      {playerName(finalCurrent.pid) ?? `Player ${finalCurrent.pid}`}
+                    </p>
+                    <p className="text-gray-400">Response</p>
+                    <p className="text-2xl text-white mb-3 break-words">
+                      {finalCurrent.answer ? finalCurrent.answer : "(no response)"}
+                    </p>
+                    <p className="text-gray-400">Wager</p>
+                    <p className="text-2xl text-white mb-6">{formatMoney(finalCurrent.wager ?? 0)}</p>
+                    {/* Reveal keeps its slot once clicked, and the judge buttons get their own
+                        row below it, so a double click on Reveal can't also judge */}
+                    {!finalCurrent.revealed ? (
+                      <button
+                        onClick={() =>
+                          stepperSend({ type: "HostRevealFinalResponse", pid: finalCurrent.pid })
+                        }
+                        disabled={stepperPaused}
+                        className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold disabled:opacity-60"
+                      >
+                        Reveal
+                      </button>
+                    ) : (
+                      <p className="px-8 py-3 text-lg font-semibold text-gray-300">
+                        Revealed on the display ✓
+                      </p>
+                    )}
+                    <div
+                      className={`flex gap-4 justify-center mt-6 pt-6 border-t border-gray-600 ${
+                        finalCurrent.revealed ? "" : "invisible"
+                      }`}
+                    >
+                      <button
+                        onClick={() => stepperSend({ type: "HostChecked", correct: true })}
+                        disabled={stepperPaused || !finalCurrent.revealed}
+                        className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-500 text-lg font-semibold disabled:opacity-60"
+                      >
+                        Correct
+                      </button>
+                      <button
+                        onClick={() => stepperSend({ type: "HostChecked", correct: false })}
+                        disabled={stepperPaused || !finalCurrent.revealed}
+                        className="px-8 py-3 bg-red-600 text-white rounded-lg hover:bg-red-500 text-lg font-semibold disabled:opacity-60"
+                      >
+                        Incorrect
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center mb-6">
+                    <p className="text-xl text-gray-300 mb-4">Every response has been judged.</p>
+                    <button
+                      onClick={() => stepperSend({ type: "HostContinue" })}
+                      disabled={stepperPaused}
+                      className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-500 text-lg font-semibold disabled:opacity-60"
+                    >
+                      Finish game
+                    </button>
+                  </div>
+                )}
+                <ol className="space-y-1">
+                  {final.entries.map((entry, idx) => (
+                    <li
+                      key={entry.pid}
+                      className={`flex justify-between rounded px-3 py-2 ${
+                        idx === final.revealIndex ? "bg-gray-600" : "bg-gray-700"
+                      }`}
+                    >
+                      <span className="text-white">
+                        {idx + 1}. {playerName(entry.pid) ?? `Player ${entry.pid}`}
+                      </span>
+                      <span className="text-gray-300">
+                        {entry.correct === null
+                          ? entry.revealed
+                            ? "revealed"
+                            : ""
+                          : `${entry.correct ? "✓ +" : "✗ -"}${formatMoney(entry.wager ?? 0)}`}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
             {/* Game End State */}
             {gameState.state === "gameEnd" && (
               <div className="bg-gray-800 rounded-lg p-6 text-center">
@@ -324,10 +687,35 @@ export default function Host() {
                       <span className="text-white font-semibold">{idx + 1}. {player.name}</span>
                       <span className={`ml-4 ${
                           player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-white"
-                        }`}>${player.score}</span>
+                        }`}>{formatMoney(player.score)}</span>
                     </div>
                   ))}
                 </div>
+                {final && final.entries.some((entry) => entry.correct !== null) && (
+                  <div className="mt-6 text-left">
+                    <h3 className="text-lg font-semibold text-white mb-1">Final Jeopardy</h3>
+                    <p className="text-gray-400 mb-2">
+                      Answer: <span className="text-yellow-300">{final.answer}</span>
+                    </p>
+                    <ul className="space-y-1">
+                      {final.entries.map((entry) => (
+                        <li key={entry.pid} className="flex justify-between gap-4 rounded bg-gray-700 px-3 py-2">
+                          <span className="text-white">
+                            {playerName(entry.pid) ?? `Player ${entry.pid}`}:{" "}
+                            <span className="text-gray-300 break-words">
+                              {entry.answer ? entry.answer : "(no response)"}
+                            </span>
+                          </span>
+                          <span className="text-gray-300 whitespace-nowrap">
+                            {entry.correct === null
+                              ? "not judged"
+                              : `${entry.correct ? "✓ +" : "✗ -"}${formatMoney(entry.wager ?? 0)}`}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
 
@@ -335,14 +723,26 @@ export default function Host() {
             <div className="bg-gray-800 rounded-lg p-6">
               <h2 className="text-xl font-semibold text-white mb-4">Scores</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {gameState.players.map((player) => (
-                  <div key={player.pid} className="bg-gray-700 rounded p-3 text-center">
+                {gameState.players.map((player) => {
+                  const picking =
+                    gameState.state === "selection" && player.pid === gameState.picker;
+                  return (
+                  <div
+                    key={player.pid}
+                    className={`bg-gray-700 rounded p-3 text-center ${
+                      picking ? "ring-2 ring-yellow-400" : ""
+                    }`}
+                  >
                     <p className="text-white font-semibold">{player.name}</p>
                     <p className={`text-2xl ${
                         player.score < 0 ? "text-red-500" : player.score === 0 ? "text-gray-500" : "text-green-400"
-                      }`}>${player.score}</p>
+                      }`}>{formatMoney(player.score)}</p>
+                    {picking && (
+                      <p className="text-yellow-400 text-xs font-bold uppercase mt-1">Picking</p>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

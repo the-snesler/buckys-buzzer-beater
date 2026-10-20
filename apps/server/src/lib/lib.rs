@@ -21,7 +21,6 @@ pub mod game;
 pub mod host;
 pub mod net;
 pub mod player;
-pub mod ws_msg;
 
 use std::{
     collections::HashMap,

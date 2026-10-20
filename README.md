@@ -11,11 +11,12 @@ How it works:
 Fun Features:
 
 - Real-time buzzing system that accounts for latency.
-- Custom question sets and categories.
+- Custom question sets and categories, made in the built-in Game Builder or loaded from a JSON game file (the format is described in [apps/SPEC.md](apps/SPEC.md#creating-a-room)).
+- Double Jeopardy, Daily Doubles and Final Jeopardy, with wagers and written responses from players' phones.
 - Support for an arbitrary number of players.
 - Separate "projection" window to display the game board without spoiling answers.
 
 Future Plans:
-- [ ] Create a testing suite for the backend
-- [ ] Implement point betting & write-in submissions (Final Jeopardy, Daily Double)
-- [ ] Add support for a second board (Double Jeopardy)
+- [x] Create a testing suite for the backend
+- [x] Implement point betting & write-in submissions (Final Jeopardy, Daily Double)
+- [x] Add support for a second board (Double Jeopardy)

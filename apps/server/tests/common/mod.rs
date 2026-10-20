@@ -88,6 +88,18 @@ pub async fn send_cmd_and_recv_all(ws: &mut WsStream, cmd: &GameCommand) -> Vec<
 /// # Returns
 /// Vec of all received messages
 pub async fn recv_msgs(ws: &mut WsStream) -> Vec<GameEvent> {
+    recv_texts(ws)
+        .await
+        .iter()
+        .map(|text| match serde_json::from_str::<GameEvent>(text) {
+            Ok(parsed) => parsed,
+            Err(e) => panic!("Failed to parse GameEvent: {}. Text: {}", e, text),
+        })
+        .collect()
+}
+
+/// Like [`recv_msgs`], but returns the raw JSON of each message
+pub async fn recv_texts(ws: &mut WsStream) -> Vec<String> {
     use tokio_tungstenite::tungstenite::Message;
 
     let mut received = Vec::new();
@@ -95,10 +107,7 @@ pub async fn recv_msgs(ws: &mut WsStream) -> Vec<GameEvent> {
 
     loop {
         match tokio::time::timeout(timeout, ws.next()).await {
-            Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<GameEvent>(&text) {
-                Ok(parsed) => received.push(parsed),
-                Err(e) => panic!("Failed to parse GameEvent: {}. Text: {}", e, text),
-            },
+            Ok(Some(Ok(Message::Text(text)))) => received.push(text.to_string()),
             Ok(Some(Ok(_))) => {
                 // Ignore non-text messages
             }
@@ -119,12 +128,17 @@ pub async fn recv_msgs(ws: &mut WsStream) -> Vec<GameEvent> {
 /// # Returns
 /// Room code of created room
 pub async fn create_room_http(port: u16) -> String {
+    create_room_http_with(port, serde_json::json!({})).await
+}
+
+/// Create a room via HTTP API, sending `body` as the create request
+pub async fn create_room_http_with(port: u16, body: serde_json::Value) -> String {
     let url = format!("http://127.0.0.1:{}/api/v1/rooms/create", port);
 
     let client = reqwest::Client::new();
     let response = client
         .post(&url)
-        .json(&serde_json::json!({}))
+        .json(&body)
         .send()
         .await
         .expect("Failed to create room");
@@ -139,27 +153,43 @@ pub async fn create_room_http(port: u16) -> String {
 
 /// Add categories to an existing room
 pub async fn add_room_categories(state: &AppState, room_code: &str) {
+    add_room_category(state, room_code, 3).await;
+}
+
+/// Add a category with `question_count` questions, worth 100, 200, ..., to an existing room
+pub async fn add_room_category(state: &AppState, room_code: &str, question_count: usize) {
     let mut room_map = state.room_map.lock().await;
     let room = room_map
         .get_mut(room_code)
         .unwrap_or_else(|| panic!("Failed to get room with code: {}", room_code));
 
-    let questions: Vec<Question> = (0..=2)
+    let questions: Vec<Question> = (0..question_count)
         .map(|i| Question {
             question: format!("Question {}", i + 1),
             answer: format!("Answer {}", i + 1),
             value: (i as u32 + 1) * 100,
             answered: false,
+            daily_double: false,
         })
         .collect();
 
-    room.categories.insert(
+    room.rounds[0].insert(
         0,
         Category {
             questions,
             title: "Category 1".to_string(),
         },
     );
+}
+
+/// Send a command without waiting for any response
+pub async fn send_cmd(ws: &mut WsStream, cmd: &GameCommand) {
+    use tokio_tungstenite::tungstenite::Message;
+
+    let json = serde_json::to_string(cmd).expect("Failed to serialize");
+    ws.send(Message::Text(Utf8Bytes::from(json)))
+        .await
+        .expect("Failed to send message");
 }
 
 /// Add a player and return their websocket and ID
@@ -236,9 +266,10 @@ pub fn get_player_score(
         .score
 }
 
-/// Start game and consume initial messages
-pub async fn start_game(host_ws: &mut WsStream, player_ws_list: &mut [&mut WsStream]) {
+/// Start the game, have `picker` choose the first clue, and consume the resulting messages
+pub async fn start_game(host_ws: &mut WsStream, player_ws_list: &mut [&mut WsStream], picker: u32) {
     send_cmd_and_recv_all(host_ws, &GameCommand::StartGame).await;
+    send_cmd_and_recv_all(host_ws, &GameCommand::HostSetPicker { pid: picker }).await;
 
     for player_ws in player_ws_list {
         let _ = recv_msgs(player_ws).await;
