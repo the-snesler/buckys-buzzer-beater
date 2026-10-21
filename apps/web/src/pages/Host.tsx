@@ -7,6 +7,7 @@ import type { GameCommand } from "../types/messages";
 import { roundName } from "../lib/rounds";
 import { formatMoney } from "../lib/money";
 import { allJudged, displayGameState } from "../lib/finalJeopardy";
+import { isMuted, playSound, setMuted, type PlaySoundMessage } from "../lib/sounds";
 
 /** How long the Final Jeopardy reveal stepper ignores clicks after each step */
 const STEPPER_PAUSE_MS = 400;
@@ -23,6 +24,7 @@ export default function Host() {
   // Whether the host is looking at the Final Jeopardy wagers and responses
   const [peekFinal, setPeekFinal] = useState(false);
   const displayWindowRef = useRef<Window | null>(null);
+  const [muted, setMutedState] = useState(isMuted);
   const hostToken = sessionStorage.getItem(`host_token_${code}`);
 
   // Forward game state to display popup, without anything the audience mustn't see yet
@@ -50,6 +52,22 @@ export default function Host() {
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
   }, [gameState, playerList, buzzedPlayer]);
+
+  // Play the display's sounds, which it can't play itself, see playOnStage
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent<PlaySoundMessage>) => {
+      if (event.origin === window.location.origin && event.data?.type === "playSound") {
+        playSound(event.data.sound);
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
+
+  const toggleMuted = () => {
+    setMuted(!muted);
+    setMutedState(!muted);
+  };
 
   const openDisplayWindow = () => {
     const popup = window.open(
@@ -219,6 +237,14 @@ export default function Host() {
           </button>
           <h1 className="text-3xl font-bold text-white">Room: {code}</h1>
           <div className="flex gap-2 items-center">
+            <button
+              onClick={toggleMuted}
+              aria-pressed={!muted}
+              title="The display's sound effects play from this window"
+              className="px-3 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm"
+            >
+              {muted ? "🔇 Sound off" : "🔊 Sound on"}
+            </button>
             <button
               onClick={openDisplayWindow}
               className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-500 text-sm"
